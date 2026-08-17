@@ -168,6 +168,7 @@ button:disabled{opacity:.4;cursor:default}
     </div>
 
     <label class="fld" style="gap:7px"><input type="checkbox" id="showmask" checked> Show result</label>
+    <label class="fld" style="gap:7px" title="Your not-crack labels, in cyan. Some specimens are almost entirely marked, so turn this off to see the image underneath."><input type="checkbox" id="showlabels" checked> My labels</label>
 
     <div class="sp"></div>
 
@@ -235,7 +236,8 @@ const post=async(u,body)=>{
 };
 const px=n=>n>=1e6?(n/1e6).toFixed(1).replace(/\.0$/,"")+"M"
   :n>=1e3?Math.round(n/1e3)+"k":String(n);
-const q=()=>`?threshold=${($("#thr").value/100).toFixed(2)}&postprocess=${$("#pp").checked?1:0}`;
+const q=()=>`?threshold=${($("#thr").value/100).toFixed(2)}&postprocess=${$("#pp").checked?1:0}`+
+  `&labels=${$("#showlabels")&&$("#showlabels").checked?1:0}`;
 
 /* ---------- model + scope ---------- */
 async function loadModel(){
@@ -599,6 +601,7 @@ $("#brush").oninput=e=>$("#brushv").textContent=e.target.value;
 $("#zoom").oninput=()=>{FITTED=false;zoomed();};   // hand-set zoom survives a resize
 $("#fit").onclick=fit;
 $("#showmask").onchange=refresh;
+$("#showlabels").onchange=refresh;
 // Legacy post-processing derives its own mask and ignores the threshold entirely
 // (pipeline.effective_mask: postprocess ? M.postprocess(prob) : prob > threshold),
 // so leaving Sensitivity live while it is on presents a control that does nothing.

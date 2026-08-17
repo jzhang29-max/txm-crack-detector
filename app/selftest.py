@@ -387,10 +387,14 @@ def main():
     try:
         _, o1 = req(B, f"/api/image/{iid}/mask.png?threshold=0.50&postprocess=0", timeout=180)
         _, o2 = req(B, f"/api/image/{iid}/mask.png?threshold=0.50&postprocess=0", timeout=180)
-        cached_file = os.path.exists(os.path.join(PROJECT, "app_data", "images", iid,
-                                                 "overlays", "0.50_0.png"))
-        check("overlay is cached and stable on repeat", o1 == o2 and cached_file,
-              f"{len(o1)} bytes, cache file {'written' if cached_file else 'MISSING'}")
+        # Match on the directory rather than one filename: the cache key encodes
+        # threshold, post-processing and now the labels toggle, so hard-coding
+        # "0.50_0.png" made this test fail the moment a legitimate key gained a field.
+        ovdir = os.path.join(PROJECT, "app_data", "images", iid, "overlays")
+        cached = sorted(f for f in os.listdir(ovdir)
+                        if f.endswith(".png")) if os.path.isdir(ovdir) else []
+        check("overlay is cached and stable on repeat", o1 == o2 and bool(cached),
+              f"{len(o1)} bytes, cache {cached if cached else 'MISSING'}")
         req(B, f"/api/image/{iid}/correction", "POST",
             dict(mode="crack", radius=20, points=[[250, 250]]))
         _, o3 = req(B, f"/api/image/{iid}/mask.png?threshold=0.50&postprocess=0", timeout=180)

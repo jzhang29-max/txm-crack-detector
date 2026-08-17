@@ -191,8 +191,13 @@ def api_mask(iid):
     """
     thr = float(request.args.get("threshold", 0.5))
     pp = request.args.get("postprocess", "0") in ("1", "true", "True")
+    # Your own not-crack labels can cover almost the whole frame -- the six
+    # owner-confirmed crack-free specimens are 94% marked -- so they have to be
+    # switchable off, or labelling on top of them means labelling on top of a wash of
+    # cyan. Part of the cache key, not just a render-time flag.
+    show_labels = request.args.get("labels", "1") in ("1", "true", "True")
 
-    tag = f"{thr:.2f}_{1 if pp else 0}"
+    tag = f"{thr:.2f}_{1 if pp else 0}_{1 if show_labels else 0}"
     cache = S.path(iid, "overlays", f"{tag}.png")
     srcs = [S.path(iid, "prob.npy"), S.path(iid, "correction.npy")]
     # Strictly older, not "not newer". Filesystem timestamps are coarse enough that an
@@ -223,11 +228,12 @@ def api_mask(iid):
     # Without this, a not-crack correction was invisible: it removed red and left plain
     # image behind, indistinguishable from somewhere you had never looked. That matters
     # now that one click can label a whole region -- you need to see what you claimed.
-    corr = S.load_npy(iid, "correction.npy")
-    if corr is not None:
-        corr = np.asarray(corr)
-        if corr.shape == mask.shape:
-            rgba[corr == 2] = (40, 190, 210, 110)   # marked not-crack
+    if show_labels:
+        corr = S.load_npy(iid, "correction.npy")
+        if corr is not None:
+            corr = np.asarray(corr)
+            if corr.shape == mask.shape:
+                rgba[corr == 2] = (40, 190, 210, 110)   # marked not-crack
     buf = io.BytesIO()
     Image.fromarray(rgba, mode="RGBA").save(buf, format="PNG", compress_level=1)
     data = buf.getvalue()
