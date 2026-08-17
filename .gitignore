@@ -4,6 +4,9 @@ __pycache__/
 .DS_Store
 # per-user runtime data: uploads, SAM embeddings, predictions, retrained models
 app_data/
-# unpacked artifacts -- regenerated from the shipped PNG/npz by unpack_package.py
+# unpacked artifacts -- regenerated from the shipped PNG/npz by unpack_package.py.
+# Must stay ignored: run_app.sh expands these on first start, and the 17-feature
+# stacks alone are 2.1 GB, so without this a user's first `git status` offers a
+# repo-breaking commit.
 dataset_cache/*.npy
 paint/corrections/*_correction.npy

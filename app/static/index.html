@@ -2,378 +2,411 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>TXM Crack Detection</title>
 <style>
-  :root { --bg:#14151a; --panel:#1c1e26; --line:#2c2f3a; --ink:#e8e8ea; --dim:#9a9ba4;
-          --accent:#3b82f6; --ok:#22a06b; --warn:#d97706; --bad:#dc2626; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system,
-         BlinkMacSystemFont,"Segoe UI",sans-serif; height:100vh; display:flex; }
-  #side { width:330px; min-width:330px; background:var(--panel); border-right:1px solid var(--line);
-          display:flex; flex-direction:column; overflow:hidden; }
-  #main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
-  h1 { font-size:15px; margin:0; padding:14px 16px; border-bottom:1px solid var(--line); font-weight:600; }
-  .sec { padding:12px 16px; border-bottom:1px solid var(--line); }
-  .sec h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
-            margin:0 0 8px; font-weight:600; }
-  button { background:#2a2d38; color:var(--ink); border:1px solid var(--line); border-radius:6px;
-           padding:7px 11px; font-size:13px; cursor:pointer; }
-  button:hover:not(:disabled) { background:#343845; }
-  button:disabled { opacity:.45; cursor:default; }
-  button.pri { background:var(--accent); border-color:var(--accent); color:#fff; }
-  button.ok { background:var(--ok); border-color:var(--ok); color:#fff; }
-  button.on { background:var(--bad); border-color:var(--bad); color:#fff; }
-  #drop { margin:12px 16px; padding:22px 12px; border:2px dashed var(--line); border-radius:10px;
-          text-align:center; color:var(--dim); cursor:pointer; }
-  #drop.hot { border-color:var(--accent); color:var(--ink); background:#1a2436; }
-  #list { flex:1; overflow-y:auto; }
-  .item { padding:9px 16px; border-bottom:1px solid #23252e; cursor:pointer; font-size:12px; }
-  .item:hover { background:#22242d; }
-  .item.sel { background:#1e2a3f; border-left:3px solid var(--accent); padding-left:13px; }
-  .item .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .item .mt { color:var(--dim); font-size:11px; margin-top:2px; }
-  #bar { display:flex; gap:8px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line);
-         flex-wrap:wrap; background:var(--panel); }
-  .grp { font-size:10px; letter-spacing:.09em; color:var(--dim); font-weight:600;
-         min-width:52px; }
-  #retrain { font-weight:600; }
-  #stage { flex:1; overflow:auto; background:#0e0f13; position:relative; }
-  #wrap { position:relative; transform-origin:0 0; }
-  #wrap img, #wrap canvas { position:absolute; top:0; left:0; display:block; }
-  #wrap canvas { cursor:crosshair; }
-  #status { padding:7px 14px; font-size:12px; color:var(--dim); border-top:1px solid var(--line);
-            background:var(--panel); min-height:30px; }
-  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-  .row + .row { margin-top:7px; }
-  label { font-size:12px; color:var(--dim); }
-  input[type=range] { width:96px; }
-  .kv { font-size:11px; color:var(--dim); line-height:1.7; }
-  .kv b { color:var(--ink); font-weight:500; }
-  #prog { height:3px; background:var(--accent); width:0; transition:width .2s; }
+/* Design rules for this file, because the previous version violated all three:
+   1. Show the FOUR things the workflow needs (load, look, fix, retrain). Every
+      other control is a tuning knob and lives behind Advanced.
+   2. One primary action visible at a time. Retrain is the only filled button.
+   3. Group by task with real whitespace, not by cramming into one flex row. */
+:root{
+  --bg:#0f1114; --surface:#16191e; --surface2:#1c2027; --line:#252a32;
+  --line2:#333a45; --ink:#eceef1; --ink2:#a8aeb8; --ink3:#6f7681;
+  --brand:#4f8ef7; --ok:#2ea36b; --warn:#c9822a; --bad:#d64545;
+  --r:8px; --shadow:0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.22);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);display:flex;
+  font:14px/1.55 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased}
+button{font:inherit;color:var(--ink);background:var(--surface2);cursor:pointer;
+  border:1px solid var(--line2);border-radius:var(--r);padding:8px 13px;
+  transition:background .12s,border-color .12s}
+button:hover:not(:disabled){background:#232833;border-color:#3d4552}
+button:active:not(:disabled){transform:translateY(1px)}
+button:disabled{opacity:.4;cursor:default}
+.primary{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
+.primary:hover:not(:disabled){background:#5f9bfa;border-color:#5f9bfa}
+.ghost{background:transparent;border-color:transparent;color:var(--ink2);padding:6px 9px}
+.ghost:hover:not(:disabled){background:var(--surface2);color:var(--ink)}
+.danger:hover:not(:disabled){border-color:var(--bad);color:#ff8080}
+
+/* ---------------- sidebar ---------------- */
+#side{width:296px;min-width:296px;background:var(--surface);
+  border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+.brand{padding:16px 18px 14px;border-bottom:1px solid var(--line)}
+.brand h1{margin:0;font-size:14px;font-weight:600;letter-spacing:-.01em}
+.brand p{margin:3px 0 0;font-size:11.5px;color:var(--ink3)}
+#drop{margin:14px;padding:20px 14px;border:1.5px dashed var(--line2);border-radius:10px;
+  text-align:center;color:var(--ink2);cursor:pointer;transition:.14s}
+#drop:hover{border-color:#44506b;background:#171c26}
+#drop.hot{border-color:var(--brand);background:#17233a;color:var(--ink)}
+#drop b{display:block;font-size:13px;font-weight:500;color:var(--ink)}
+#drop span{font-size:11px;color:var(--ink3)}
+.lbl{padding:12px 18px 6px;font-size:10.5px;font-weight:600;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--ink3)}
+#list{flex:1;overflow-y:auto;padding-bottom:8px}
+.item{display:flex;gap:10px;align-items:center;padding:8px 18px;cursor:pointer;
+  border-left:2px solid transparent}
+.item:hover{background:#1a1e25}
+.item.sel{background:#1a2333;border-left-color:var(--brand)}
+.item .th{width:38px;height:30px;flex:0 0 38px;border-radius:4px;background:#0b0d10;
+  object-fit:contain;background:#0b0d10;border:1px solid var(--line)}
+.item .tx{min-width:0;flex:1}
+.item .nm{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .sub{display:block;font-size:11px;color:var(--ink3);margin-top:1px}
+.item .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:0 0 6px}
+.item .dot.busy{background:var(--warn)}
+#modelcard{border-top:1px solid var(--line);padding:13px 18px;background:#13161b}
+#modelcard .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink3)}
+#modelcard .v{font-size:12px;margin-top:3px}
+#modelcard .v b{font-weight:600}
+#scope{font-size:11.5px;color:var(--ink3);margin-top:8px;line-height:1.5}
+
+/* ---------------- main ---------------- */
+#main{flex:1;display:flex;flex-direction:column;min-width:0}
+#top{display:flex;align-items:center;gap:14px;padding:11px 18px;background:var(--surface);
+  border-bottom:1px solid var(--line)}
+.seg{display:inline-flex;background:var(--surface2);border:1px solid var(--line2);
+  border-radius:var(--r);overflow:hidden}
+.seg button{border:0;border-radius:0;background:transparent;padding:7px 13px;font-size:13px;color:var(--ink2)}
+.seg button+button{border-left:1px solid var(--line2)}
+.seg button.on{background:var(--brand);color:#fff;font-weight:500}
+.seg button:hover:not(.on){background:#232833;color:var(--ink)}
+.sp{flex:1}
+.menu{position:relative}
+.menu .pop{position:absolute;top:calc(100% + 7px);right:0;z-index:40;min-width:230px;
+  background:var(--surface2);border:1px solid var(--line2);border-radius:10px;
+  box-shadow:var(--shadow);padding:6px;display:none}
+.menu.open .pop{display:block}
+.pop button{display:block;width:100%;text-align:left;background:transparent;border:0;
+  border-radius:6px;padding:8px 10px;font-size:13px}
+.pop button:hover{background:#282e39}
+.pop .hint{font-size:11px;color:var(--ink3);padding:6px 10px 8px;line-height:1.45}
+.pop hr{border:0;border-top:1px solid var(--line);margin:5px 2px}
+#adv{padding:0 18px;background:#12151a;border-bottom:1px solid var(--line);
+  max-height:0;overflow:hidden;transition:max-height .18s ease,padding .18s ease}
+#adv.open{max-height:200px;padding:13px 18px}
+.advrow{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+.fld{display:flex;gap:9px;align-items:center;font-size:12px;color:var(--ink2)}
+.fld input[type=range]{width:118px;accent-color:var(--brand)}
+.fld .num{font-variant-numeric:tabular-nums;color:var(--ink);min-width:34px}
+.note{font-size:11px;color:var(--ink3);margin-top:9px;line-height:1.5;max-width:760px}
+#prog{height:2px;background:var(--brand);width:0;transition:width .25s}
+#stage{flex:1;overflow:auto;background:#0a0c0e;position:relative}
+#wrap{position:relative;transform-origin:0 0}
+#wrap img,#wrap canvas{position:absolute;top:0;left:0;display:block}
+#wrap canvas{cursor:crosshair}
+#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:var(--ink3);font-size:13px;text-align:center;padding:30px}
+#status{display:flex;gap:10px;align-items:center;padding:9px 18px;font-size:12px;
+  color:var(--ink2);background:var(--surface);border-top:1px solid var(--line);min-height:36px}
+#status .tag{font-size:10.5px;padding:2px 7px;border-radius:20px;border:1px solid var(--line2);
+  color:var(--ink3)}
+.kbd{font:11px ui-monospace,monospace;background:#20242c;border:1px solid var(--line2);
+  border-radius:4px;padding:1px 5px;color:var(--ink2)}
 </style>
 </head>
 <body>
-<div id="side">
-  <h1>TXM Crack Detection</h1>
-  <div id="drop">Drag TXM images here<br><span style="font-size:11px">or click to choose · .tif .tiff .png</span></div>
-  <input type="file" id="file" multiple accept=".tif,.tiff,.png,.jpg" style="display:none">
-  <div class="sec">
-    <h2>Model</h2>
-    <div class="kv" id="modelinfo">loading…</div>
-    <div class="kv" id="corrinfo" style="margin-top:7px"></div>
-  </div>
-  <div class="sec"><h2>Images</h2></div>
-  <div id="list"></div>
-</div>
 
-<div id="main">
-  <div id="bar" style="border-bottom:none;padding-bottom:0">
-    <span class="grp">MODEL</span>
-    <button id="retrain" class="ok">&#9635; Retrain on my corrections</button>
-    <button id="reoverlay">Re-overlay all</button>
-    <button id="rollback">Roll back</button>
-    <span id="corrbrief" style="font-size:12px;color:var(--dim)"></span>
+<aside id="side">
+  <div class="brand">
+    <h1>TXM Crack Detection</h1>
+    <p>Load · review · correct · retrain</p>
   </div>
-  <div id="bar">
-    <span class="grp">PAINT</span>
-    <button id="mCrack" class="on">Add crack</button>
-    <button id="mErase">Eraser</button>
-    <button id="mRegion">Remove region</button>
-    <label>Brush <input type="range" id="brush" min="2" max="120" value="24"><span id="brushv">24</span></label>
-    <label>Zoom <input type="range" id="zoom" min="5" max="400" value="100"><span id="zoomv">100%</span></label>
-    <button id="fit">Fit</button>
-    <span style="width:1px;height:20px;background:var(--line)"></span>
-    <span class="grp">VIEW</span>
-    <label><input type="checkbox" id="showmask" checked> Overlay</label>
-    <label title="Blur + shape validation + minimum-size filter. MEASURED COST on ground truth: -0.084 IoU, -0.072 recall, and recall against hand-painted strokes falls from ~0.87 to 0.14-0.40. Off is the better default; on reproduces the older pipeline's output.">
-      <input type="checkbox" id="pp"> Post-process <span style="opacity:.55">(worse: &minus;0.08 IoU)</span></label>
-    <label>Thresh <input type="range" id="thr" min="5" max="95" value="50"><span id="thrv">0.50</span></label>
-    <span style="width:1px;height:20px;background:var(--line)"></span>
-    <span class="grp">EDIT</span>
-    <button id="undo">Undo <span style="opacity:.6">&#8984;Z</span></button>
-    <button id="clear" title="Erase every correction on THIS image and start over. One ⌘Z (Cmd+Z) restores it.">Reset this image</button>
-    <span style="width:1px;height:20px;background:var(--line)"></span>
-    <label style="color:var(--dim)">Download</label>
-    <button id="dlMask">B&amp;W mask</button>
-    <button id="dlOvl">Overlay</button>
-    <button id="dlCsv">CSV</button>
-    <button id="dlAll" class="pri">All as .zip</button>
+
+  <div id="drop">
+    <b>Drop TXM images</b>
+    <span>or click to browse — .tif .tiff .png</span>
   </div>
+  <input type="file" id="file" multiple accept=".tif,.tiff,.png,.jpg" hidden>
+
+  <div class="lbl">Images <span id="ncount" style="color:var(--ink3)"></span></div>
+  <div id="list"></div>
+
+  <div id="modelcard">
+    <div class="k">Current model</div>
+    <div class="v" id="mdesc">loading…</div>
+    <div id="scope"></div>
+  </div>
+</aside>
+
+<main id="main">
+  <div id="top">
+    <div class="seg" id="tools">
+      <button data-mode="crack" class="on">Add crack</button>
+      <button data-mode="erase">Erase</button>
+      <button data-mode="region">Remove area</button>
+    </div>
+
+    <label class="fld" style="gap:7px"><input type="checkbox" id="showmask" checked> Show result</label>
+
+    <div class="sp"></div>
+
+    <button class="ghost" id="advBtn" title="Threshold, post-processing, brush and zoom">Advanced ▾</button>
+
+    <div class="menu" id="expMenu">
+      <button class="ghost" id="expBtn">Export ▾</button>
+      <div class="pop">
+        <button data-exp="mask">Black &amp; white mask</button>
+        <button data-exp="overlay">Overlay image</button>
+        <button data-exp="csv">Measurements (CSV)</button>
+        <hr>
+        <button data-exp="all"><b>Everything, all images (.zip)</b></button>
+        <div class="hint">Exports what you see now, with your corrections applied.</div>
+      </div>
+    </div>
+
+    <button class="primary" id="retrain">Retrain</button>
+  </div>
+
+  <div id="adv">
+    <div class="advrow">
+      <div class="fld">Brush <input type="range" id="brush" min="2" max="120" value="24"><span class="num" id="brushv">24</span></div>
+      <div class="fld">Zoom <input type="range" id="zoom" min="5" max="400" value="100"><span class="num" id="zoomv">100%</span>
+        <button class="ghost" id="fit">Fit</button></div>
+      <div class="fld">Sensitivity <input type="range" id="thr" min="5" max="95" value="50"><span class="num" id="thrv">0.50</span></div>
+      <label class="fld" style="gap:7px"><input type="checkbox" id="pp"> Legacy post-processing</label>
+      <div class="sp"></div>
+      <button class="ghost" id="undo2">Undo <span class="kbd">⌘Z</span></button>
+      <button class="ghost danger" id="reset">Reset image</button>
+      <button class="ghost danger" id="del">Remove from list</button>
+    </div>
+    <div class="note" id="advnote"></div>
+  </div>
+
   <div id="prog"></div>
-  <div id="stage"><div id="wrap">
-    <img id="base"><img id="ovl"><canvas id="cv"></canvas>
-  </div></div>
-  <div id="status">Drag some images in to begin.</div>
-</div>
+  <div id="stage">
+    <div id="wrap"><img id="base"><img id="ovl"><canvas id="cv"></canvas></div>
+    <div id="empty">Drop TXM images on the left to begin.</div>
+  </div>
+  <div id="status"><span id="msg">Ready.</span><span class="sp"></span><span class="tag" id="tag"></span></div>
+</main>
 
 <script>
-const $ = s => document.querySelector(s);
-let IMAGES = [], CUR = null, MODE = "crack", DRAW = false, PTS = [], POLL = null;
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+let IMAGES=[],CUR=null,MODE="crack",DRAW=false,PTS=[],POLL=null,BUSY=false;
 
-const say = (t, c) => { const s = $("#status"); s.textContent = t; s.style.color = c || "var(--dim)"; };
+const say=(t,c)=>{const e=$("#msg");e.textContent=t;e.style.color=c||"var(--ink2)";};
+const tag=t=>{$("#tag").textContent=t||"";$("#tag").style.display=t?"":"none";};
+const j=async(u,o)=>(await fetch(u,o)).json();
+const q=()=>`?threshold=${($("#thr").value/100).toFixed(2)}&postprocess=${$("#pp").checked?1:0}`;
 
-async function j(url, opt) { const r = await fetch(url, opt); return r.json(); }
-
-async function loadModel() {
-  const m = await j("/api/model");
-  $("#modelinfo").innerHTML =
-    `<b>${m.description}</b><br>${m.current.label || ""}` +
-    (m.ground_truth_available ? "" : "<br><span style='color:var(--warn)'>no ground truth — retrain cannot validate</span>");
+/* ---------- model + scope ---------- */
+async function loadModel(){
+  const m=await j("/api/model");
+  $("#mdesc").innerHTML=`<b>${m.current.kind==="ensemble"?"SAM + 17-feature ensemble":"single model"}</b>`+
+    `<div style="color:var(--ink3);font-size:11.5px;margin-top:2px">${m.current.label||""}</div>`+
+    (m.ground_truth_available?"":`<div style="color:var(--warn);font-size:11.5px;margin-top:4px">No ground truth — retraining cannot be validated.</div>`);
+}
+function scope(){
+  const ck=IMAGES.reduce((a,i)=>a+(i.corrected_crack_px||0),0);
+  const nk=IMAGES.reduce((a,i)=>a+(i.corrected_not_px||0),0);
+  const n=IMAGES.filter(i=>i.corrected_crack_px||i.corrected_not_px).length;
+  const el=$("#scope"), btn=$("#retrain");
+  if(!ck&&!nk){
+    el.innerHTML=`<b style="color:var(--ink2)">Retrain</b> learns from your corrections.<br>Paint some first.`;
+    btn.disabled=true; return;
+  }
+  btn.disabled=BUSY;
+  const one=(!ck||!nk)?`<br><span style="color:var(--warn)">Paint some ${ck?"Erase":"Add crack"} too — retraining needs both.</span>`:"";
+  el.innerHTML=`<b style="color:var(--ink2)">Retrain</b> will use ${(ck/1000).toFixed(0)}k crack + `+
+    `${(nk/1000).toFixed(0)}k not-crack pixels from ${n} image${n==1?"":"s"}, plus 4 reference images.${one}`;
 }
 
-async function loadList(keep) {
-  const d = await j("/api/images"); IMAGES = d.images || [];
-  const L = $("#list"); L.innerHTML = "";
-  if (!IMAGES.length) L.innerHTML = "<div class='item mt' style='color:var(--dim)'>none yet</div>";
-  for (const im of IMAGES) {
-    const el = document.createElement("div");
-    el.className = "item" + (CUR === im.id ? " sel" : "");
-    const area = im.predicted_area != null ? (im.predicted_area * 100).toFixed(2) + "%" : "—";
-    const cor = im.corrected_crack_px ? ` · ${(im.corrected_crack_px/1000).toFixed(0)}k painted` : "";
-    el.innerHTML = `<div class="nm">${im.filename || im.id}</div>
-      <div class="mt">${im.status === "ready" ? area : im.status}${cor}</div>`;
-    el.onclick = () => show(im.id);
+/* ---------- image list ---------- */
+async function loadList(keep){
+  IMAGES=(await j("/api/images")).images||[];
+  $("#ncount").textContent=IMAGES.length?`(${IMAGES.length})`:"";
+  const L=$("#list");L.innerHTML="";
+  for(const im of IMAGES){
+    const el=document.createElement("div");
+    el.className="item"+(CUR===im.id?" sel":"");
+    const ready=im.status==="ready";
+    const pct=im.predicted_area!=null?(im.predicted_area*100).toFixed(1)+"% crack":im.status;
+    const cor=im.corrected_crack_px||im.corrected_not_px?" · edited":"";
+    el.innerHTML=`<span class="dot${ready?"":" busy"}"></span>`+
+      (ready?`<img class="th" src="/api/image/${im.id}/thumb.png?w=128" loading="lazy">`:`<span class="th"></span>`)+
+      `<span class="tx"><span class="nm">${im.filename||im.id}</span><span class="sub">${pct}${cor}</span></span>`;
+    el.onclick=()=>show(im.id);
     L.appendChild(el);
   }
-  if (!keep && !CUR && IMAGES.length) show(IMAGES[0].id);
-  updateCorrInfo();
+  if(!keep&&!CUR&&IMAGES.length)show(IMAGES[0].id);
+  scope();
 }
 
-// Make the Retrain button's SCOPE visible. It trains on every correction across
-// every image plus the built-in ground truth -- not just the image on screen --
-// and there was previously nothing on screen saying so.
-function updateCorrInfo() {
-  const withCrack = IMAGES.filter(i => i.corrected_crack_px > 0).length;
-  const withNot   = IMAGES.filter(i => i.corrected_not_px > 0).length;
-  const ck = IMAGES.reduce((a,i) => a + (i.corrected_crack_px||0), 0);
-  const nk = IMAGES.reduce((a,i) => a + (i.corrected_not_px||0), 0);
-  const el = $("#corrinfo");
-  if (!ck && !nk) {
-    const b0 = $("#corrbrief"); if (b0) b0.innerHTML = "&larr; paint some corrections first";
-    el.innerHTML = "<span style='color:var(--warn)'>no corrections painted yet</span><br>" +
-                   "Retrain needs some of BOTH: <i>Add crack</i> on real cracks, <i>Eraser</i> or " +
-                   "<i>Remove region</i> on false positives.";
-    $("#retrain").disabled = true;
-    return;
-  }
-  $("#retrain").disabled = false;
-  const bal = (ck && nk) ? "" :
-    "<br><span style='color:var(--warn)'>only one kind painted &mdash; retrain will refuse. " +
-    "Paint some " + (ck ? "<i>Eraser</i>/<i>Remove region</i>" : "<i>Add crack</i>") + " too.</span>";
-  const brief = $("#corrbrief");
-  if (brief) brief.innerHTML = `&larr; uses <b>${(ck/1000).toFixed(0)}k</b> crack + ` +
-      `<b>${(nk/1000).toFixed(0)}k</b> not-crack px from ${Math.max(withCrack, withNot)} image(s)`;
-  el.innerHTML = `Retrain will use <b>all</b> corrections:<br>` +
-    `<b>${(ck/1000).toFixed(0)}k</b> crack px across ${withCrack} image(s)<br>` +
-    `<b>${(nk/1000).toFixed(0)}k</b> not-crack px across ${withNot} image(s)<br>` +
-    `plus the 4 built-in ground-truth images` + bal;
-}
-
-async function show(id) {
-  CUR = id; loadList(true);
-  const im = IMAGES.find(x => x.id === id) || {};
-  if (im.status !== "ready") { say(`${im.filename||id}: ${im.status||"processing"}…`); return; }
-  const w = im.width, h = im.height;
-  $("#wrap").style.width = w + "px"; $("#wrap").style.height = h + "px";
-  for (const el of [$("#base"), $("#ovl")]) { el.style.width = w+"px"; el.style.height = h+"px"; }
-  const cv = $("#cv"); cv.width = w; cv.height = h; cv.style.width = w+"px"; cv.style.height = h+"px";
+async function show(id){
+  CUR=id;loadList(true);
+  const im=IMAGES.find(x=>x.id===id)||{};
+  $("#empty").style.display="none";
+  if(im.status!=="ready"){say(`${im.filename||id}: ${im.status||"processing"}…`);return;}
+  const w=im.width,h=im.height;
+  $("#wrap").style.width=w+"px";$("#wrap").style.height=h+"px";
+  for(const e of [$("#base"),$("#ovl")]){e.style.width=w+"px";e.style.height=h+"px";}
+  const cv=$("#cv");cv.width=w;cv.height=h;cv.style.width=w+"px";cv.style.height=h+"px";
   cv.getContext("2d").clearRect(0,0,w,h);
-  $("#base").src = `/api/image/${id}/display.png`;
-  refreshMask();
-  fit();
-  const st = await j(`/api/image/${id}/stats`);
-  say(`${im.filename} · ${w}×${h} (${im.megapixels} MP) · ${(st.area_fraction*100).toFixed(2)}% crack, ${st.n_regions} regions · display: ${im.display||"?"}`);
+  $("#base").src=`/api/image/${id}/display.png`;
+  refresh();fit();
+  const st=await j(`/api/image/${id}/stats`);
+  say(`${im.filename}`);
+  tag(`${w}×${h} · ${(st.area_fraction*100).toFixed(2)}% crack · ${st.n_regions} regions`);
 }
+function refresh(){
+  if(!CUR)return;
+  $("#ovl").src=`/api/image/${CUR}/mask.png${q()}&r=${Date.now()}`;
+  $("#ovl").style.display=$("#showmask").checked?"block":"none";
+}
+function fit(){
+  const im=IMAGES.find(x=>x.id===CUR);if(!im)return;
+  const s=$("#stage");
+  $("#zoom").value=Math.max(5,Math.min(400,Math.floor(Math.min(s.clientWidth/im.width,s.clientHeight/im.height)*100)));
+  zoomed();
+}
+function zoomed(){$("#wrap").style.transform=`scale(${$("#zoom").value/100})`;$("#zoomv").textContent=$("#zoom").value+"%";}
 
-function refreshMask() {
-  if (!CUR) return;
-  const t = ($("#thr").value/100).toFixed(2), pp = $("#pp").checked ? 1 : 0;
-  $("#ovl").src = `/api/image/${CUR}/mask.png?threshold=${t}&postprocess=${pp}&r=${Date.now()}`;
-  $("#ovl").style.display = $("#showmask").checked ? "block" : "none";
-}
+/* ---------- painting ---------- */
+const xy=e=>{const r=$("#cv").getBoundingClientRect(),z=$("#zoom").value/100;
+  return [(e.clientX-r.left)/z,(e.clientY-r.top)/z];};
+function dot(x,y){const c=$("#cv").getContext("2d");
+  c.fillStyle=MODE==="crack"?"rgba(70,225,140,.85)":"rgba(90,160,255,.85)";
+  c.beginPath();c.arc(x,y,+$("#brush").value,0,7);c.fill();}
 
-function fit() {
-  const im = IMAGES.find(x => x.id === CUR); if (!im) return;
-  const st = $("#stage");
-  const z = Math.min(st.clientWidth / im.width, st.clientHeight / im.height) * 100;
-  $("#zoom").value = Math.max(5, Math.min(400, Math.floor(z))); applyZoom();
-}
-function applyZoom() {
-  const z = $("#zoom").value / 100;
-  $("#wrap").style.transform = `scale(${z})`;
-  $("#zoomv").textContent = $("#zoom").value + "%";
-}
-
-// ---- painting
-function xy(e) {
-  const cv = $("#cv"), r = cv.getBoundingClientRect();
-  const z = $("#zoom").value / 100;
-  return [(e.clientX - r.left) / z, (e.clientY - r.top) / z];
-}
-function paintDot(x, y) {
-  const ctx = $("#cv").getContext("2d"), r = +$("#brush").value;
-  ctx.fillStyle = MODE === "crack" ? "rgba(60,220,120,0.85)" : "rgba(80,150,255,0.85)";
-  ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
-}
-$("#cv").addEventListener("mousedown", async e => {
-  if (!CUR) return;
-  if (MODE === "region") {
-    const [x,y] = xy(e);
-    say("removing region…");
-    const r = await j(`/api/image/${CUR}/flip_region`, {method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({x, y, mode:"remove",
-                            threshold: +($("#thr").value/100).toFixed(2),
-                            postprocess: $("#pp").checked})});
-    if (!r.ok) { say(r.error || "nothing there", "var(--warn)"); return; }
-    refreshMask(); loadList(true);
-    say(`removed a ${r.region_px.toLocaleString()} px region · \u2318Z to undo (${r.undo_depth} step${r.undo_depth==1?"":"s"})`, "var(--ok)");
-    return;
+$("#cv").addEventListener("mousedown",async e=>{
+  if(!CUR)return;
+  if(MODE==="region"){
+    const [x,y]=xy(e);say("removing area…");
+    const r=await j(`/api/image/${CUR}/flip_region`,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({x,y,mode:"remove",threshold:+($("#thr").value/100).toFixed(2),postprocess:$("#pp").checked})});
+    if(!r.ok){say(r.error||"nothing there","var(--warn)");return;}
+    refresh();loadList(true);
+    say(`removed ${r.region_px.toLocaleString()} px — ⌘Z to undo`,"var(--ok)");return;
   }
-  DRAW = true; PTS = []; const [x,y]=xy(e); PTS.push([x,y]); paintDot(x,y);
+  DRAW=true;PTS=[];const [x,y]=xy(e);PTS.push([x,y]);dot(x,y);
 });
-$("#cv").addEventListener("mousemove", e => { if (!DRAW || MODE === "region") return; const [x,y]=xy(e); PTS.push([x,y]); paintDot(x,y); });
-window.addEventListener("mouseup", async () => {
-  if (!DRAW) return; DRAW = false;
-  if (!PTS.length || !CUR) return;
-  say(`saving ${PTS.length} strokes…`);
-  const r = await j(`/api/image/${CUR}/correction`, {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({mode: MODE, points: PTS, radius: +$("#brush").value})});
-  PTS = [];
-  $("#cv").getContext("2d").clearRect(0,0,$("#cv").width,$("#cv").height);
-  refreshMask(); loadList(true);
-  say(`saved · ${(r.crack_px/1000).toFixed(0)}k crack px, ${(r.not_px/1000).toFixed(0)}k not-crack px · \u2318Z to undo (${r.undo_depth} step${r.undo_depth==1?"":"s"})`, "var(--ok)");
+$("#cv").addEventListener("mousemove",e=>{if(!DRAW||MODE==="region")return;const [x,y]=xy(e);PTS.push([x,y]);dot(x,y);});
+addEventListener("mouseup",async()=>{
+  if(!DRAW)return;DRAW=false;
+  if(!PTS.length||!CUR)return;
+  const r=await j(`/api/image/${CUR}/correction`,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({mode:MODE,points:PTS,radius:+$("#brush").value})});
+  PTS=[];$("#cv").getContext("2d").clearRect(0,0,$("#cv").width,$("#cv").height);
+  refresh();loadList(true);
+  say(`saved — ⌘Z to undo`,"var(--ok)");
 });
 
-// ---- upload
-const drop = $("#drop");
-drop.onclick = () => $("#file").click();
-["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
-["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
-drop.addEventListener("drop", e => upload(e.dataTransfer.files));
-$("#file").onchange = e => upload(e.target.files);
+/* ---------- upload ---------- */
+const drop=$("#drop");
+drop.onclick=()=>$("#file").click();
+["dragenter","dragover"].forEach(v=>drop.addEventListener(v,e=>{e.preventDefault();drop.classList.add("hot")}));
+["dragleave","drop"].forEach(v=>drop.addEventListener(v,e=>{e.preventDefault();drop.classList.remove("hot")}));
+drop.addEventListener("drop",e=>up(e.dataTransfer.files));
+$("#file").onchange=e=>up(e.target.files);
+// dropping anywhere on the canvas works too -- people aim at the image
+["dragenter","dragover"].forEach(v=>$("#stage").addEventListener(v,e=>e.preventDefault()));
+$("#stage").addEventListener("drop",e=>{e.preventDefault();up(e.dataTransfer.files)});
 
-async function upload(files) {
-  if (!files || !files.length) return;
-  const fd = new FormData();
-  for (const f of files) fd.append("files", f);
-  say(`uploading ${files.length} file(s)…`);
-  const r = await j("/api/upload", {method:"POST", body: fd});
-  if (!r.ok) { say("upload failed: " + r.error, "var(--bad)"); return; }
+async function up(files){
+  if(!files||!files.length)return;
+  const fd=new FormData();for(const f of files)fd.append("files",f);
+  say(`uploading ${files.length} file${files.length==1?"":"s"}…`);
+  const r=await j("/api/upload",{method:"POST",body:fd});
+  if(!r.ok){say("upload failed: "+r.error,"var(--bad)");return;}
   await loadList(true);
-  if (r.job) watch(r.job, "processing images");
-  else say("already processed — nothing to do");
+  r.job?watch(r.job,"Processing"):say("already processed");
 }
 
-// ---- jobs
-function watch(jid, what) {
-  clearInterval(POLL);
-  POLL = setInterval(async () => {
-    const s = await j(`/api/job/${jid}`);
-    const pct = s.n ? Math.round(100 * s.k / s.n) : 0;
-    $("#prog").style.width = pct + "%";
-    if (s.state === "running") { say(`${what}: ${s.stage}${s.n?` (${s.k}/${s.n})`:""}`); return; }
-    clearInterval(POLL); $("#prog").style.width = "0";
-    if (s.state === "error") { say(`${what} FAILED — ${s.error}`, "var(--bad)"); console.log(s.trace); return; }
-    const res = s.result || {};
-    if (res.info) {   // retrain
-      let msg = `retrain done in ${s.seconds}s · ${res.info.n_px.toLocaleString()} px, ${res.info.n_features} features, ${(res.info.crack_fraction*100).toFixed(1)}% crack`;
-      if (res.incumbent) msg += ` · IoU ${res.incumbent.iou.toFixed(3)} → ${res.candidate.iou.toFixed(3)}`;
-      msg += res.deployed ? " · DEPLOYED" : ` · not deployed (${res.reason||"gate"})`;
-      say(msg, res.deployed ? "var(--ok)" : "var(--warn)");
-      if (res.warning) console.warn(res.warning);
+/* ---------- jobs ---------- */
+function watch(jid,what){
+  clearInterval(POLL);BUSY=true;$("#retrain").disabled=true;
+  POLL=setInterval(async()=>{
+    const s=await j(`/api/job/${jid}`);
+    $("#prog").style.width=(s.n?Math.round(100*s.k/s.n):0)+"%";
+    if(s.state==="running"){say(`${what}: ${s.stage}${s.n?` (${s.k}/${s.n})`:""}`);return;}
+    clearInterval(POLL);$("#prog").style.width="0";BUSY=false;
+    if(s.state==="error"){say(`${what} failed — ${s.error}`,"var(--bad)");console.error(s.trace);scope();return;}
+    const res=s.result||{};
+    if(res.info!==undefined||res.error){                       // a retrain result
+      if(!res.ok){say(res.error||"retraining refused","var(--warn)");scope();return;}
+      let m=`Retrained on ${res.info.n_px.toLocaleString()} pixels`;
+      if(res.incumbent)m+=` · accuracy ${res.incumbent.iou.toFixed(3)} → ${res.candidate.iou.toFixed(3)}`;
       await loadModel();
-      if (res.deployed) {
-        say(msg + " — re-predicting your images with it…", "var(--ok)");
-        const rr = await j("/api/reoverlay", {method:"POST"});
-        watch(rr.job, "re-overlaying with the new model");
-        return;
-      }
-    } else {
-      say(`${what}: done in ${s.seconds}s`, "var(--ok)");
-    }
-    await loadList(true); if (CUR) show(CUR);
-  }, 900);
+      if(res.deployed){say(m+" — applying to your images…","var(--ok)");
+        const rr=await j("/api/reoverlay",{method:"POST"});watch(rr.job,"Updating results");return;}
+      say(m+` · not applied (${res.reason||"no improvement"}) — previous model kept`,"var(--warn)");
+    }else say(`${what} complete`,"var(--ok)");
+    await loadList(true);if(CUR)show(CUR);scope();
+  },900);
 }
 
-$("#retrain").onclick = async () => {
-  const ck = IMAGES.reduce((a,i) => a + (i.corrected_crack_px||0), 0);
-  const nk = IMAGES.reduce((a,i) => a + (i.corrected_not_px||0), 0);
-  const ni = IMAGES.filter(i => i.corrected_crack_px || i.corrected_not_px).length;
-  if (!confirm(
-    `Train a new model on EVERY correction you have painted?\n\n` +
-    `  \u2022 ${ck.toLocaleString()} crack pixels\n` +
-    `  \u2022 ${nk.toLocaleString()} not-crack pixels\n` +
-    `  \u2022 across ${ni} image(s), plus the 4 built-in ground-truth images\n\n` +
-    `Takes a few minutes. It is scored against the ground truth and is only ` +
-    `deployed if it does not regress; otherwise your current model is kept.\n\n` +
-    `If it deploys, your images are re-predicted automatically.`)) return;
-  const r = await j("/api/retrain", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
-  watch(r.job, "retraining");
+/* ---------- actions ---------- */
+$("#retrain").onclick=async()=>{
+  const ck=IMAGES.reduce((a,i)=>a+(i.corrected_crack_px||0),0);
+  const nk=IMAGES.reduce((a,i)=>a+(i.corrected_not_px||0),0);
+  const n=IMAGES.filter(i=>i.corrected_crack_px||i.corrected_not_px).length;
+  if(!confirm(`Retrain the model?\n\nLearns from ${ck.toLocaleString()} crack and `+
+    `${nk.toLocaleString()} not-crack pixels you painted across ${n} image${n==1?"":"s"}, `+
+    `plus 4 reference images.\n\nTakes a few minutes. The new model is only used if it `+
+    `scores at least as well as the current one; otherwise nothing changes.\n\n`+
+    `Your images are updated automatically if it is used.`))return;
+  watch((await j("/api/retrain",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).job,"Retraining");
 };
-$("#reoverlay").onclick = async () => {
-  const r = await j("/api/reoverlay", {method:"POST"});
-  watch(r.job, "re-overlaying");
-};
-$("#rollback").onclick = async () => {
-  if (!confirm("Restore the previous model?")) return;
-  const r = await j("/api/rollback", {method:"POST"});
-  await loadModel(); say(r.ok ? "rolled back — press Re-overlay all" : "no previous model", r.ok?"var(--ok)":"var(--warn)");
-};
-$("#clear").onclick = async () => {
-  if (!CUR || !confirm("Erase every correction on this image?")) return;
-  await j(`/api/image/${CUR}/correction`, {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({mode:"clear"})});
-  refreshMask(); loadList(true); say("corrections cleared");
-};
-function expQuery() {
-  const t = ($("#thr").value/100).toFixed(2), pp = $("#pp").checked ? 1 : 0;
-  return `?threshold=${t}&postprocess=${pp}`;
-}
-$("#dlMask").onclick = () => { if (CUR) window.location = `/api/export/${CUR}/mask.png` + expQuery(); };
-$("#dlOvl").onclick  = () => { if (CUR) window.location = `/api/export/${CUR}/overlay.png` + expQuery(); };
-$("#dlCsv").onclick  = () => { if (CUR) window.location = `/api/export/${CUR}/stats.csv` + expQuery(); };
-$("#dlAll").onclick  = () => { say("building zip — this can take a moment for many images…");
-                               window.location = `/api/export/all.zip` + expQuery(); };
-
-// ---- undo. Two layers: an in-progress stroke is cancelled locally (nothing has
-// been sent yet), otherwise the server pops its delta stack.
-async function doUndo() {
-  if (DRAW && PTS.length) {         // mid-stroke: discard it, nothing was saved
-    DRAW = false; PTS = [];
-    $("#cv").getContext("2d").clearRect(0,0,$("#cv").width,$("#cv").height);
-    say("stroke cancelled"); return;
-  }
-  if (!CUR) return;
-  const r = await j(`/api/image/${CUR}/undo`, {method:"POST"});
-  if (!r.ok) { say("nothing left to undo", "var(--warn)"); return; }
-  refreshMask(); loadList(true);
-  say(`undone · ${(r.crack_px/1000).toFixed(0)}k crack px remain · ${r.undo_depth} more undo step(s)`, "var(--ok)");
-}
-$("#undo").onclick = doUndo;
-window.addEventListener("keydown", e => {
-  const z = (e.key === "z" || e.key === "Z");
-  if (z && (e.metaKey || e.ctrlKey) && !e.shiftKey) { e.preventDefault(); doUndo(); }
+$$("[data-exp]").forEach(b=>b.onclick=()=>{
+  const k=b.dataset.exp;$("#expMenu").classList.remove("open");
+  if(k==="all"){say("building archive…");location=`/api/export/all.zip${q()}`;return;}
+  if(!CUR){say("select an image first","var(--warn)");return;}
+  location=`/api/export/${CUR}/${k==="mask"?"mask.png":k==="overlay"?"overlay.png":"stats.csv"}${q()}`;
 });
+$("#expBtn").onclick=e=>{e.stopPropagation();$("#expMenu").classList.toggle("open")};
+addEventListener("click",()=>$("#expMenu").classList.remove("open"));
 
-function setMode(m) {
-  MODE = m;
-  for (const [k, el] of [["crack","#mCrack"],["erase","#mErase"],["region","#mRegion"]])
-    $(el).classList.toggle("on", k === m);
-  $("#cv").style.cursor = m === "region" ? "pointer" : "crosshair";
+$("#advBtn").onclick=()=>{
+  const o=$("#adv").classList.toggle("open");
+  $("#advBtn").textContent="Advanced "+(o?"▴":"▾");
+  $("#advnote").innerHTML=o?`<b>Sensitivity</b> lowers or raises how much the model marks — 0.50 is the calibrated default. `+
+    `<b>Legacy post-processing</b> reproduces the older pipeline's cleanup; it is off because it measurably removes thin cracks `+
+    `(−0.08 accuracy, −0.07 of the crack found).`:"";
+};
+
+async function undo(){
+  if(DRAW&&PTS.length){DRAW=false;PTS=[];$("#cv").getContext("2d").clearRect(0,0,$("#cv").width,$("#cv").height);
+    say("stroke cancelled");return;}
+  if(!CUR)return;
+  const r=await j(`/api/image/${CUR}/undo`,{method:"POST"});
+  if(!r.ok){say("nothing to undo","var(--warn)");return;}
+  refresh();loadList(true);say(`undone · ${r.undo_depth} step${r.undo_depth==1?"":"s"} left`,"var(--ok)");
 }
-$("#mCrack").onclick  = () => setMode("crack");
-$("#mErase").onclick  = () => setMode("erase");
-$("#mRegion").onclick = () => setMode("region");
-$("#brush").oninput = e => $("#brushv").textContent = e.target.value;
-$("#zoom").oninput = applyZoom;
-$("#fit").onclick = fit;
-$("#showmask").onchange = refreshMask;
-$("#pp").onchange = refreshMask;
-$("#thr").oninput = e => { $("#thrv").textContent = (e.target.value/100).toFixed(2); };
-$("#thr").onchange = refreshMask;
+$("#undo2").onclick=undo;
+addEventListener("keydown",e=>{
+  if((e.key==="z"||e.key==="Z")&&(e.metaKey||e.ctrlKey)&&!e.shiftKey){e.preventDefault();undo();}
+  if(e.key==="1")setMode("crack");if(e.key==="2")setMode("erase");if(e.key==="3")setMode("region");
+});
+$("#reset").onclick=async()=>{
+  if(!CUR||!confirm("Erase your corrections on this image?\n\n⌘Z restores them."))return;
+  await j(`/api/image/${CUR}/correction`,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({mode:"clear"})});
+  refresh();loadList(true);say("corrections erased — ⌘Z to restore");
+};
+$("#del").onclick=async()=>{
+  if(!CUR||!confirm("Remove this image and its corrections from the app?\n\nThis cannot be undone. Your original file is untouched."))return;
+  await fetch(`/api/image/${CUR}`,{method:"DELETE"});CUR=null;
+  await loadList();say("removed");
+  if(!IMAGES.length){$("#empty").style.display="flex";tag("");}
+};
 
-loadModel(); loadList();
+function setMode(m){MODE=m;$$("#tools button").forEach(b=>b.classList.toggle("on",b.dataset.mode===m));
+  $("#cv").style.cursor=m==="region"?"pointer":"crosshair";}
+$$("#tools button").forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+$("#brush").oninput=e=>$("#brushv").textContent=e.target.value;
+$("#zoom").oninput=zoomed;
+$("#fit").onclick=fit;
+$("#showmask").onchange=refresh;
+$("#pp").onchange=refresh;
+$("#thr").oninput=e=>$("#thrv").textContent=(e.target.value/100).toFixed(2);
+$("#thr").onchange=refresh;
+
+loadModel();loadList();
 </script>
 </body>
 </html>

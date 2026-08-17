@@ -123,6 +123,45 @@ def api_display(iid):
     return send_file(buf, mimetype="image/png")
 
 
+@app.route("/api/image/<iid>/thumb.png")
+def api_thumb(iid):
+    """Small preview with the crack burned in, for the sidebar list.
+
+    Exists because the list was pointing its <img> at display.png: a 2.5 MB
+    full-resolution PNG decoded down to a 38 px box, once per row. At 71 images
+    that is ~180 MB of transfer to draw a sidebar. This is ~6 KB and shows the
+    result rather than just the image, so a row is informative at a glance.
+    Cached on disk since it only changes when the prediction or corrections do.
+    """
+    from PIL import Image
+    W = int(request.args.get("w", 128))
+    cache = S.path(iid, f"thumb_{W}.png")
+    corr_p = S.path(iid, "correction.npy")
+    prob_p = S.path(iid, "prob.npy")
+    fresh = (os.path.exists(cache)
+             and all(not os.path.exists(p) or os.path.getmtime(p) <= os.path.getmtime(cache)
+                     for p in (corr_p, prob_p)))
+    if fresh:
+        return send_file(cache, mimetype="image/png")
+
+    disp = S.load_npy(iid, "display.npy")
+    if disp is None:
+        disp = S.load_npy(iid, "img.npy")
+    if disp is None:
+        return jsonify(ok=False, error="not ingested"), 404
+    g = (np.clip(np.asarray(disp), 0, 1) * 255).astype(np.uint8)
+    im = Image.fromarray(g).convert("RGB")
+    mask = P.effective_mask(iid)
+    if mask is not None and mask.shape == g.shape:
+        red = Image.new("RGB", im.size, (230, 60, 55))
+        im = Image.composite(Image.blend(im, red, 0.55), im,
+                             Image.fromarray((mask * 255).astype(np.uint8)))
+    h = max(1, round(W * im.size[1] / im.size[0]))
+    im = im.resize((W, h), Image.LANCZOS)
+    im.save(cache, format="PNG", optimize=True)
+    return send_file(cache, mimetype="image/png")
+
+
 @app.route("/api/image/<iid>/mask.png")
 def api_mask(iid):
     thr = float(request.args.get("threshold", 0.5))

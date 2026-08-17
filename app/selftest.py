@@ -150,22 +150,33 @@ def main():
         except Exception as e:
             check(label, False, str(e))
 
-    # ---- painting
+    # ---- painting.
+    # Start from a known state. Re-uploading the same file reuses its entry (the id
+    # is a content hash), so an earlier run -- or an earlier ABORTED run -- can leave
+    # corrections behind. Asserting absolute pixel counts then fails for a reason
+    # that has nothing to do with the app, which is exactly what happened once.
+    req(B, f"/api/image/{iid}/correction", "POST", dict(mode="clear"))
+    _, base = req(B, f"/api/image/{iid}/stats")
     _, r = req(B, f"/api/image/{iid}/correction", "POST",
                dict(mode="crack", radius=30, points=[[400, 400], [440, 410], [480, 420]]))
     check("paint crack stroke", r.get("crack_px", 0) > 0, f"{r.get('crack_px'):,} px")
+    crack_after_first = r.get("crack_px")
+    not_after_first = r.get("not_px")
     d1 = r.get("undo_depth")
     _, r2 = req(B, f"/api/image/{iid}/correction", "POST",
                 dict(mode="erase", radius=30, points=[[900, 500], [940, 510]]))
-    check("paint eraser stroke", r2.get("not_px", 0) > 0, f"{r2.get('not_px'):,} px")
+    check("paint eraser stroke", r2.get("not_px", 0) > not_after_first,
+          f"{r2.get('not_px'):,} px")
     check("undo stack grows per stroke", r2.get("undo_depth") == d1 + 1,
           f"{d1} -> {r2.get('undo_depth')}")
 
-    # ---- undo
+    # ---- undo: must restore exactly the state before the LAST stroke
     _, u = req(B, f"/api/image/{iid}/undo", "POST")
     check("undo removes only the last stroke",
-          u.get("ok") and u.get("not_px") == 0 and u.get("crack_px") == r.get("crack_px"),
-          f"crack {u.get('crack_px'):,} / not {u.get('not_px'):,}")
+          bool(u.get("ok")) and u.get("not_px") == not_after_first
+          and u.get("crack_px") == crack_after_first,
+          f"crack {u.get('crack_px'):,} (want {crack_after_first:,}) / "
+          f"not {u.get('not_px'):,} (want {not_after_first:,})")
 
     # ---- region removal. Probe a point that is actually INSIDE a predicted
     # region, found from the mask itself -- a hard-coded coordinate silently
