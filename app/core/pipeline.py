@@ -46,6 +46,51 @@ GT_STEMS = ["333_75_um_zoom", "336_25", "338_13", "LARGE_343_75"]
 IOU_TOL = 0.01
 FP_TOL = 0.005
 
+# Extensions the uploader accepts. Kept here next to the reader that has to cope
+# with them so the two cannot drift apart.
+READABLE_EXT = (".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp")
+
+
+def read_any_image(src):
+    """Read a TIFF with tifffile and anything else with PIL.
+
+    This used to be a bare tifffile.imread(), which meant a dropped PNG or JPEG was
+    accepted by the uploader, copied into app_data, and only then failed the ingest
+    job with "not a TIFF file: header=b'\\x89PNG'" -- while the drop zone was openly
+    advertising .png. TXM data is TIFF in practice, but the UI offered the others.
+
+    Extension picks the reader, with the other as a fallback so a mislabelled file
+    (a TIFF named .png, which batch exporters do produce) still loads. If both fail,
+    the error from the reader the extension implied is the one raised, since that is
+    the one describing what the user actually handed us.
+    """
+    ext = os.path.splitext(src)[1].lower()
+
+    def _tiff():
+        import tifffile
+        return tifffile.imread(src)
+
+    def _pil():
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None      # these mosaics trip the decompression-bomb guard
+        with Image.open(src) as im:
+            # Leave 16-bit/float/grayscale modes alone -- robust_normalize downstream
+            # handles the range, and converting would throw away bit depth.
+            if im.mode in ("I", "I;16", "I;16B", "I;16L", "F", "L"):
+                return np.asarray(im)
+            if im.mode in ("P", "RGBA", "LA", "CMYK", "1"):
+                im = im.convert("RGB")     # ndim==3 is collapsed by the caller
+            return np.asarray(im)
+
+    first, second = (_tiff, _pil) if ext in (".tif", ".tiff") else (_pil, _tiff)
+    try:
+        return first()
+    except Exception as e_expected:
+        try:
+            return second()
+        except Exception:
+            raise e_expected
+
 
 # ------------------------------------------------------------------- ingest
 def ingest(image_id, progress=None, force=False):
@@ -55,7 +100,6 @@ def ingest(image_id, progress=None, force=False):
         if progress:
             progress(stage, k, n)
 
-    import tifffile
     from txm_features import robust_normalize
 
     src = S.original_path(image_id)
@@ -64,8 +108,7 @@ def ingest(image_id, progress=None, force=False):
 
     if force or S.load_npy(image_id, "img.npy", mmap=True) is None:
         rep("reading image")
-        raw = tifffile.imread(src)
-        raw = np.asarray(raw)
+        raw = np.asarray(read_any_image(src))
         if raw.ndim == 3:
             # A colour or multi-page TIFF: take the first plane / mean channel
             raw = raw.mean(axis=-1) if raw.shape[-1] in (3, 4) else raw[0]
@@ -421,6 +464,22 @@ def retrain(deploy=True, progress=None):
         S.set_current(cand_entry)
         _model_cache["key"] = None
         result.update(deployed=True)
+        # Re-predict every image inside this job, rather than leaving it to the
+        # browser to call /api/reoverlay afterwards. If that call never happens --
+        # the tab was closed, the laptop slept, the page was reloaded during the
+        # retrain -- the registry says the new model is current while every mask on
+        # screen is still the old model's output, with nothing indicating the
+        # mismatch. The embeddings are cached, so this is the classifier pass only.
+        ids = [m["id"] for m in S.list_images()]
+        for k, iid in enumerate(ids, 1):
+            if progress:
+                progress(f"re-applying to {iid} ({k}/{len(ids)})", k, len(ids))
+            try:
+                ingest(iid)
+            except Exception as e:                        # noqa: BLE001
+                # One unreadable image must not abandon the rest with stale masks.
+                result.setdefault("reapply_failed", []).append(f"{iid}: {e}")
+        result["reapplied"] = len(ids) - len(result.get("reapply_failed", []))
     else:
         result.update(deployed=False,
                       reason=(None if passes else

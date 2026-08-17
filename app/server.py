@@ -88,13 +88,22 @@ def api_upload():
     files = request.files.getlist("files")
     if not files:
         return jsonify(ok=False, error="no files in request"), 400
-    added, reused = [], []
+    added, reused, rejected = [], [], []
     for f in files:
         content = f.read()
         if not content:
             continue
+        # Check the extension HERE rather than letting ingest discover it. Failing
+        # inside the background job means the file is already stored and the user
+        # gets a decoder traceback in a job status instead of a sentence.
+        if os.path.splitext(f.filename or "")[1].lower() not in P.READABLE_EXT:
+            rejected.append(f.filename or "(unnamed)")
+            continue
         iid, is_new = S.save_upload(f.filename, content)
         (added if is_new else reused).append(iid)
+    if rejected and not (added or reused):
+        return jsonify(ok=False, error=f"cannot read {', '.join(rejected)} — "
+                                       f"supported: {' '.join(P.READABLE_EXT)}"), 400
     todo = added + [i for i in reused if not os.path.exists(S.path(i, "prob.npy"))]
 
     def work(report):
@@ -106,7 +115,7 @@ def api_upload():
         return dict(processed=out)
 
     jid = _job(work, f"ingest {len(todo)} image(s)") if todo else None
-    return jsonify(ok=True, added=added, reused=reused, job=jid)
+    return jsonify(ok=True, added=added, reused=reused, rejected=rejected, job=jid)
 
 
 @app.route("/api/image/<iid>/display.png")
@@ -182,7 +191,12 @@ def api_mask(iid):
 @app.route("/api/image/<iid>/stats")
 def api_stats(iid):
     m = S.read_meta(iid)
-    mask = P.effective_mask(iid)
+    # Honour the same threshold/post-process options as mask.png and the exports.
+    # This used to call effective_mask() bare, so the status bar always reported the
+    # numbers for threshold 0.50 no matter what the user was actually looking at --
+    # move Sensitivity to 0.30 and the picture changed while the crack % did not.
+    t, pp = _opts()
+    mask = P.effective_mask(iid, threshold=t, postprocess=pp)
     if mask is not None:
         from skimage.measure import label
         m = dict(m, area_fraction=float(mask.mean()),
@@ -194,6 +208,13 @@ def api_stats(iid):
 def api_correction(iid):
     """Apply brush strokes. Body: {mode:'crack'|'erase'|'clear', points:[[x,y],...], radius:int}"""
     d = request.get_json(force=True, silent=True) or {}
+    # Held across the whole load-modify-save: see store.image_lock. Without it a
+    # second stroke arriving mid-save silently discards the first.
+    with S.image_lock(iid):
+        return _apply_correction(iid, d)
+
+
+def _apply_correction(iid, d):
     corr = S.load_npy(iid, "correction.npy")
     if corr is None:
         return jsonify(ok=False, error="not ingested"), 404
@@ -248,6 +269,11 @@ def api_flip_region(iid):
     thr = float(d.get("threshold", 0.5))
     pp = bool(d.get("postprocess", False))
 
+    with S.image_lock(iid):                 # same read-modify-write as a brush stroke
+        return _apply_flip_region(iid, x, y, mode, thr, pp, label)
+
+
+def _apply_flip_region(iid, x, y, mode, thr, pp, label):
     mask = P.effective_mask(iid, threshold=thr, postprocess=pp)
     corr = S.load_npy(iid, "correction.npy")
     if mask is None or corr is None:
@@ -275,11 +301,14 @@ def api_flip_region(iid):
 
 @app.route("/api/image/<iid>/undo", methods=["POST"])
 def api_undo(iid):
-    ok = S.pop_undo(iid)
-    corr = S.load_npy(iid, "correction.npy")
-    a = np.asarray(corr) if corr is not None else np.zeros((1, 1), np.uint8)
-    return jsonify(ok=ok, crack_px=int((a == 1).sum()), not_px=int((a == 2).sum()),
-                   undo_depth=S.undo_depth(iid))
+    # Under the same lock as painting: an undo that pops a delta while a stroke is
+    # mid-save would apply it to an array that is about to be overwritten.
+    with S.image_lock(iid):
+        ok = S.pop_undo(iid)
+        corr = S.load_npy(iid, "correction.npy")
+        a = np.asarray(corr) if corr is not None else np.zeros((1, 1), np.uint8)
+        return jsonify(ok=ok, crack_px=int((a == 1).sum()), not_px=int((a == 2).sum()),
+                       undo_depth=S.undo_depth(iid))
 
 
 @app.route("/api/image/<iid>", methods=["DELETE"])

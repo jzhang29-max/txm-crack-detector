@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import shutil
+import threading
 import time
 
 import numpy as np
@@ -57,6 +58,31 @@ def path(image_id, *parts):
     return os.path.join(IMAGES, image_id, *parts)
 
 
+# --------------------------------------------------------- per-image locking
+_locks = {}
+_locks_guard = threading.Lock()
+
+
+def image_lock(image_id):
+    """Serialise read-modify-write of one image's correction array.
+
+    server.py runs Flask with threaded=True, and every brush stroke is a
+    load correction.npy -> modify -> save cycle. Two of those in flight at once --
+    a fast painter whose strokes overlap, an undo pressed while a stroke is still
+    saving, or two browser tabs on the same image -- both read the same array and the
+    second save overwrites the first, which had already told the user "saved". The
+    stroke is not just delayed, it is gone, and nothing anywhere reports a problem.
+
+    Per image rather than one global lock, so painting one image never blocks
+    predicting or exporting another.
+    """
+    with _locks_guard:
+        lk = _locks.get(image_id)
+        if lk is None:
+            lk = _locks[image_id] = threading.Lock()
+        return lk
+
+
 def exists(image_id):
     return os.path.isdir(path(image_id))
 
@@ -87,12 +113,36 @@ def read_meta(image_id):
         return {}
 
 
+def write_json(p, obj):
+    """Atomic JSON write, for the same reason as save_npy.
+
+    read_meta() swallows a parse error and returns {}, which is the right call for a
+    missing file but means a half-written meta.json degrades silently into an image
+    with no dimensions and no status. registry.json matters more still: it holds which
+    model is current and the whole retrain history, and write_meta runs on every
+    progress update during ingest, so these files are rewritten far more often than
+    their importance suggests.
+    """
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(obj, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_meta(image_id, meta):
     cur = read_meta(image_id)
     cur.update(meta)
-    os.makedirs(path(image_id), exist_ok=True)
-    with open(path(image_id, "meta.json"), "w") as f:
-        json.dump(cur, f, indent=2)
+    write_json(path(image_id, "meta.json"), cur)
     return cur
 
 
@@ -112,8 +162,33 @@ def load_npy(image_id, name, mmap=False):
 
 
 def save_npy(image_id, name, arr):
-    os.makedirs(path(image_id), exist_ok=True)
-    np.save(path(image_id, name), arr)
+    """Write atomically: full file to a temp name, fsync, then rename over the target.
+
+    The app has no save button -- every brush stroke is a write to correction.npy --
+    so this path runs constantly while someone works, and it rewrites the WHOLE array
+    each time (2.9 MB for a typical image, 23 MB for the big mosaic). Writing in place
+    meant a crash or power cut mid-write left a truncated file, and the loss is not the
+    one stroke in flight, it is every correction ever painted on that image. rename(2)
+    is atomic on the same filesystem, so a reader sees either the old file or the new
+    one. Verified: SIGKILL immediately after a stroke, restart, corrections intact.
+    """
+    d = path(image_id)
+    os.makedirs(d, exist_ok=True)
+    final = path(image_id, name)
+    tmp = final + ".tmp"
+    try:
+        with open(tmp, "wb") as fh:
+            np.save(fh, arr)
+            fh.flush()
+            os.fsync(fh.fileno())          # without this the rename can beat the data to disk
+        os.replace(tmp, final)
+    except BaseException:
+        # Never leave a stray .tmp behind to be mistaken for real data later.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ------------------------------------------------------------------ undo
@@ -224,11 +299,16 @@ def _default_registry():
 def registry():
     if not os.path.exists(REGISTRY):
         r = _default_registry()
-        with open(REGISTRY, "w") as f:
-            json.dump(r, f, indent=2)
+        write_json(REGISTRY, r)
         return r
-    with open(REGISTRY) as f:
-        return json.load(f)
+    try:
+        with open(REGISTRY) as f:
+            return json.load(f)
+    except Exception:
+        # A registry we cannot parse must not take the app down: fall back to the
+        # shipped baseline, which is a real working model, rather than raising on
+        # every request. Retrain history is lost, the ability to predict is not.
+        return _default_registry()
 
 
 def set_current(entry):
@@ -236,8 +316,7 @@ def set_current(entry):
     if r.get("current"):
         r.setdefault("history", []).append(r["current"])
     r["current"] = entry
-    with open(REGISTRY, "w") as f:
-        json.dump(r, f, indent=2)
+    write_json(REGISTRY, r)
     return r
 
 
@@ -251,6 +330,5 @@ def rollback():
     r.setdefault("history", []).append(r["current"])
     r["current"] = prev
     r["history"] = hist + [h for h in r["history"] if h is not prev][-20:]
-    with open(REGISTRY, "w") as f:
-        json.dump(r, f, indent=2)
+    write_json(REGISTRY, r)
     return True

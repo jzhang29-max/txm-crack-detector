@@ -63,10 +63,22 @@ def req(base, path, method="GET", body=None, files=None, timeout=600):
         r = urllib.request.Request(url, data=data, method=method)
         if data:
             r.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(r, timeout=timeout) as resp:
-        raw = resp.read()
-        ctype = resp.headers.get("Content-Type", "")
-        return resp.status, (json.loads(raw) if "json" in ctype else raw)
+    try:
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
+            raw = resp.read()
+            ctype = resp.headers.get("Content-Type", "")
+            return resp.status, (json.loads(raw) if "json" in ctype else raw)
+    except urllib.error.HTTPError as e:
+        # A 4xx is a legitimate answer to test -- "this file is not readable" is
+        # supposed to be a 400 with a JSON explanation. urlopen raises on those and
+        # str(HTTPError) does not include the body, so read it here and return it
+        # like any other response; callers already inspect .ok / .error.
+        raw = e.read()
+        ctype = e.headers.get("Content-Type", "") if e.headers else ""
+        try:
+            return e.code, (json.loads(raw) if "json" in ctype else raw)
+        except Exception:
+            return e.code, raw
 
 
 def wait_job(base, jid, label, timeout=2400):
@@ -140,6 +152,37 @@ def main():
           f"{(me.get('predicted_area') or 0)*100:.2f}% crack")
     check("display image is preprocessed", "destitch" in str(me.get("display", "")),
           str(me.get("display")))
+
+    # ---- file formats the UI advertises must actually load.
+    # The drop zone offers .tif .tiff .png and the file picker adds .jpg, but ingest
+    # read everything with tifffile.imread, so a dropped PNG was accepted, stored,
+    # and then died with "not a TIFF file: header=b'\x89PNG'". Tested here because
+    # it shipped: the previous suite only ever uploaded a TIFF.
+    try:
+        from PIL import Image as _I
+        buf = io.BytesIO()
+        _I.fromarray((np.linspace(0, 255, 256 * 256).reshape(256, 256)).astype(np.uint8)).save(buf, format="PNG")
+        _, pu = req(B, "/api/upload", files={"files": ("SELFTEST_PNG.png", buf.getvalue())}, timeout=120)
+        pid = (pu.get("added") or pu.get("reused") or [None])[0]
+        pj = wait_job(B, pu["job"], "png ingest") if pu.get("job") else {"state": "done"}
+        check("PNG upload ingests (not just TIFF)", pu.get("ok") is True and pj["state"] == "done",
+              pj.get("error") or "ok")
+        if pid:
+            req(B, f"/api/image/{pid}", "DELETE")
+    except Exception as e:
+        check("PNG upload ingests (not just TIFF)", False, str(e))
+
+    # An unreadable file should be refused at upload with a sentence, not stored and
+    # then failed inside a background job with a decoder traceback.
+    try:
+        st_rej, rj = req(B, "/api/upload", files={"files": ("SELFTEST_NOTES.txt", b"not an image")}, timeout=60)
+        check("unreadable file is refused with a clear message",
+              rj.get("ok") is False and "supported" in (rj.get("error") or ""),
+              (rj.get("error") or "")[:70])
+    except Exception as e:
+        # req() raises on a 400, which is itself the correct behaviour -- accept it
+        # as long as the message names what is supported.
+        check("unreadable file is refused with a clear message", "supported" in str(e), str(e)[:70])
 
     # ---- rendering endpoints
     for path, label in [(f"/api/image/{iid}/display.png", "display PNG renders"),
@@ -256,6 +299,56 @@ def main():
         check("post-process toggle changes the mask", p1 != p2)
     except Exception as e:
         check("threshold / post-process toggles", False, str(e))
+
+    # ---- the status bar must describe the mask actually on screen.
+    # api_stats used to call effective_mask() with no arguments, so it always
+    # reported threshold 0.50 while the user looked at something else.
+    try:
+        _, s20 = req(B, f"/api/image/{iid}/stats?threshold=0.20", timeout=180)
+        _, s80 = req(B, f"/api/image/{iid}/stats?threshold=0.80", timeout=180)
+        a20, a80 = s20.get("area_fraction"), s80.get("area_fraction")
+        check("stats honour the sensitivity setting", a20 is not None and a80 is not None and a20 > a80,
+              f"{a20:.4f} at 0.20 vs {a80:.4f} at 0.80")
+    except Exception as e:
+        check("stats honour the sensitivity setting", False, str(e))
+
+    # ---- concurrent strokes must not lose each other.
+    # Flask runs threaded and every stroke is a load-modify-save of the whole
+    # correction array, so without a per-image lock the later write silently
+    # discarded the earlier stroke -- which had already reported "saved".
+    try:
+        import threading as _th
+        req(B, f"/api/image/{iid}/correction", "POST", dict(mode="clear"))
+        boxes = [[[300, 300]], [[400, 400]], [[500, 500]], [[600, 600]],
+                 [[700, 700]], [[800, 800]], [[900, 900]], [[1000, 1000]]]
+        errs = []
+
+        def paint(pts):
+            try:
+                req(B, f"/api/image/{iid}/correction", "POST",
+                    dict(mode="crack", radius=15, points=pts), timeout=300)
+            except Exception as ex:                      # noqa: BLE001
+                errs.append(str(ex))
+
+        ts = [_th.Thread(target=paint, args=(p,)) for p in boxes]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        # Measure directly rather than probing with undo, which would itself
+        # remove one of the dabs being counted.
+        _, lst = req(B, "/api/images")
+        me = [m for m in lst.get("images", []) if m["id"] == iid]
+        painted = me[0].get("corrected_crack_px", 0) if me else 0
+        # The 8 dabs are disjoint disks of radius 15, so with the lock held every
+        # one survives: 8 * ~709 px. A lost update shows up as a whole dab missing.
+        n_equiv = painted / 709.0
+        check("concurrent strokes do not overwrite each other",
+              not errs and n_equiv >= 7.5,
+              f"{painted:,} px = {n_equiv:.1f} of 8 dabs kept"
+              + (f"; errors: {errs[:1]}" if errs else ""))
+    except Exception as e:
+        check("concurrent strokes do not overwrite each other", False, str(e))
 
     # ---- reset
     _, c = req(B, f"/api/image/{iid}/correction", "POST", dict(mode="clear"))
