@@ -164,7 +164,7 @@ button:disabled{opacity:.4;cursor:default}
     <div class="seg" id="tools">
       <button data-mode="crack" class="on" title="Drag to add crack the model missed">Add crack</button>
       <button data-mode="erase" title="Drag to erase just the pixels your brush covers">Erase</button>
-      <button data-mode="region" title="Click once to delete a whole connected blob of the result">Delete region</button>
+      <button data-mode="region" title="One click labels a whole region as not-crack: a red blob to delete it, or an artifact the model missed">Mark not-crack</button>
     </div>
 
     <label class="fld" style="gap:7px"><input type="checkbox" id="showmask" checked> Show result</label>
@@ -412,7 +412,12 @@ $("#cv").addEventListener("mousedown",async e=>{
       {x,y,mode:"remove",threshold:+($("#thr").value/100).toFixed(2),postprocess:$("#pp").checked});
     if(!r.ok){say(r.error||"nothing there","var(--warn)");return;}
     refresh();loadList(true);
-    say(`removed ${r.region_px.toLocaleString()} px — ⌘Z to undo`,"var(--ok)");return;
+    // Say WHICH region was taken. Clicking a red blob and clicking a grey artifact the
+    // model ignored are the same gesture but different labels, and the user should not
+    // have to guess which one they just recorded.
+    const what={"prediction":"predicted region","weak activation":"region the model half-marked"}[r.source]
+      ||(r.source&&r.source.startsWith("darkness")?"dark area":"region");
+    say(`marked ${r.region_px.toLocaleString()} px of ${what} as background — ⌘Z to undo`,"var(--ok)");return;
   }
   // Remember which tool drew this stroke: the save happens after an await and the
   // user may have switched tools by then.
@@ -579,7 +584,7 @@ async function removeImage(id,name){
 const TOOL_HINT={
   crack:"Drag to paint crack the model missed. Brush size is under Advanced.",
   erase:"Drag to erase — removes only the pixels your brush passes over.",
-  region:"Click once to delete a whole connected blob of the model's result — for false positives too big to brush out.",
+  region:"Click a red blob to delete it, or click any artifact/background the model got wrong to label it as not-crack — one click, whole region.",
 };
 function setMode(m){MODE=m;$$("#tools button").forEach(b=>b.classList.toggle("on",b.dataset.mode===m));
   $("#cv").style.cursor=m==="region"?"pointer":"crosshair";

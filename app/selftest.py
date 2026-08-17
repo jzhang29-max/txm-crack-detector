@@ -250,11 +250,38 @@ def main():
                 dict(x=probe[0], y=probe[1], mode="remove"), timeout=180)
     if fr.get("ok"):
         check("remove-region deletes a whole component", fr.get("region_px", 0) > 1000,
-              f"{fr.get('region_px'):,} px")
+              f"{fr.get('region_px'):,} px, source={fr.get('source')}")
         _, u2 = req(B, f"/api/image/{iid}/undo", "POST")
         check("undo restores a removed region", u2.get("ok") is True)
     else:
         skip("remove-region", fr.get("error", "no region under the probe point"))
+
+    # ---- one click must also be able to label something the model did NOT mark.
+    # This is the capability the SEM pipeline documents as the one its dataset was
+    # missing: every label collected was positive, so there was no way to record
+    # "I looked at this and it is not a crack". A region the model half-fires on is a
+    # hard negative sitting on the decision boundary.
+    try:
+        import numpy as _np
+        prob = _np.load(os.path.join(PROJECT, "app_data", "images", iid, "prob.npy"),
+                        mmap_mode="r")
+        weak = _np.argwhere((_np.asarray(prob) > 0.15) & (_np.asarray(prob) < 0.40))
+        if not len(weak):
+            skip("one click labels a region the model only half-marked",
+                 "no weak-activation pixels on the test image")
+        else:
+            wy, wx = weak[len(weak) // 2]
+            _, wr = req(B, f"/api/image/{iid}/flip_region", "POST",
+                        dict(x=int(wx), y=int(wy), mode="remove"), timeout=300)
+            check("one click labels a region the model only half-marked",
+                  bool(wr.get("ok")) and wr.get("source") == "weak activation"
+                  and wr.get("not_px", 0) > 0,
+                  f"{wr.get('region_px', 0):,} px via {wr.get('source')!r}"
+                  if wr.get("ok") else str(wr.get("error"))[:60])
+            if wr.get("ok"):
+                req(B, f"/api/image/{iid}/undo", "POST")
+    except Exception as e:
+        check("one click labels a region the model only half-marked", False, str(e))
 
     # ---- exports
     for ep, magic, label in [("mask.png", b"\x89PNG", "export B&W mask"),

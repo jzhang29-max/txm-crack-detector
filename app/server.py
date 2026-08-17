@@ -334,6 +334,60 @@ def api_flip_region(iid):
         return _apply_flip_region(iid, x, y, mode, thr, pp, label)
 
 
+#: A click that misses the prediction falls back to the model's WEAK activations, then
+#: to plain darkness. Kept as module constants so the numbers are visible and tunable.
+WEAK_PROB = 0.15          # "the model half-suspects this" -- the hard negatives
+BG_MAX_AREA_FRAC = 0.25   # refuse to label a quarter of the image in one click
+
+
+def _candidate_under_point(iid, x, y, mask, label, thr, pp):
+    """What region did the user mean by clicking here? Returns (mask, source).
+
+    Three sources, in order, because a background click is not the same gesture as a
+    remove click:
+
+    1. The displayed prediction. Clicking a red blob means that blob.
+    2. The model's WEAK activations (prob > WEAK_PROB). This is the case SEM's
+       paint_server calls out explicitly: "without this mode there is no way to record
+       a negative example for a region the pipeline defaulted to not-crack -- which is
+       exactly the data a classifier needs". An artifact the model half-fires on is a
+       hard negative sitting right on the decision boundary, and it is worth far more
+       per pixel than empty background.
+    3. Darkness, flood-filled from the click. For an artifact the model ignores
+       entirely there is no probability blob to grab, so fall back to the image itself.
+    """
+    if mask is not None and mask[y, x]:
+        lab = label(mask, connectivity=2)
+        return lab == lab[y, x], "prediction"
+
+    prob = S.load_npy(iid, "prob.npy")
+    if prob is not None:
+        prob = np.asarray(prob)
+        weak = prob > WEAK_PROB
+        if weak[y, x]:
+            lab = label(weak, connectivity=2)
+            return lab == lab[y, x], "weak activation"
+
+    # Darkness flood fill on the HUMAN view, since that is what the user is looking at
+    # when they decide something is an artifact.
+    disp = S.load_npy(iid, "display.npy")
+    if disp is None:
+        disp = S.load_npy(iid, "img.npy")
+    if disp is None:
+        return None, None
+    disp = np.asarray(disp, dtype=np.float32)
+    from skimage.segmentation import flood
+    here = float(disp[y, x])
+    # Tolerance from the image's own spread rather than a fixed number: these are
+    # percentile-normalised detector counts and the contrast varies per specimen.
+    tol = max(0.02, float(np.std(disp)) * 0.75)
+    try:
+        region = flood(disp, (y, x), tolerance=tol)
+    except Exception:                                     # noqa: BLE001
+        return None, None
+    return region, f"darkness (value {here:.3f} +/- {tol:.3f})"
+
+
 def _apply_flip_region(iid, x, y, mode, thr, pp, label):
     mask = P.effective_mask(iid, threshold=thr, postprocess=pp)
     corr = S.load_npy(iid, "correction.npy")
@@ -342,20 +396,26 @@ def _apply_flip_region(iid, x, y, mode, thr, pp, label):
     H, W = mask.shape
     if not (0 <= y < H and 0 <= x < W):
         return jsonify(ok=False, error="click outside image"), 400
-    if not mask[y, x]:
-        return jsonify(ok=False, error="no predicted region under that point"), 200
 
-    lab = label(mask, connectivity=2)
-    target = lab == lab[y, x]
+    target, source = _candidate_under_point(iid, x, y, mask, label, thr, pp)
+    if target is None or not target.any():
+        return jsonify(ok=False, error="nothing identifiable under that point"), 200
     n = int(target.sum())
+    # A flood fill can escape into the whole specimen. Refuse rather than let one click
+    # label a quarter of the image, which the user would then have to hunt down.
+    if n > BG_MAX_AREA_FRAC * target.size and source and source.startswith("darkness"):
+        return jsonify(ok=False, error=(f"that area runs into {100.0*n/target.size:.0f}% of the "
+                                        f"image -- too big to label from one click; "
+                                        f"brush it instead")), 200
+
     ys, xs = np.nonzero(target)
     y0, y1 = int(ys.min()), int(ys.max()) + 1
     x0, x1 = int(xs.min()), int(xs.max()) + 1
     corr = np.asarray(corr).copy()
     S.push_undo(iid, y0, y1, x0, x1, corr[y0:y1, x0:x1].copy())
-    corr[target] = 2 if mode == "remove" else 1
+    corr[target] = 1 if mode == "confirm" else 2
     S.save_npy(iid, "correction.npy", corr)
-    return jsonify(ok=True, region_px=n, mode=mode,
+    return jsonify(ok=True, region_px=n, mode=mode, source=source,
                    crack_px=int((corr == 1).sum()), not_px=int((corr == 2).sum()),
                    undo_depth=S.undo_depth(iid))
 
