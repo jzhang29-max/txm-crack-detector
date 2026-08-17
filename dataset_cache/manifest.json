@@ -1,0 +1,71 @@
+{
+  "feature_names": [
+    "intensity",
+    "smooth_s2",
+    "smooth_s4",
+    "smooth_s8",
+    "smooth_s16",
+    "smooth_s32",
+    "smooth_s64",
+    "gradmag_s1",
+    "gradmag_s2",
+    "gradmag_s4",
+    "gradmag_s8",
+    "laplacian_s1",
+    "laplacian_s2",
+    "laplacian_s4",
+    "laplacian_s8",
+    "texture_s2",
+    "texture_s8"
+  ],
+  "images": [
+    {
+      "name": "LARGE_343_75",
+      "shape": [
+        3691,
+        6367
+      ],
+      "gt_coverage": 0.18573800486855718,
+      "feat_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/LARGE_343_75_features.npy",
+      "gt_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/LARGE_343_75_gt.npy",
+      "img_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/LARGE_343_75_img.npy",
+      "raw_source": "/Users/jiamingzhang/Desktop/260618_b2_343_75_LARGE/Average_mosaic_260618_b2_343_75_LARGE_idx00000_mosaictileAA_img001of010.xrm.bim.bim.tif"
+    },
+    {
+      "name": "333_75_um_zoom",
+      "shape": [
+        1671,
+        1706
+      ],
+      "gt_coverage": 0.2552686578787298,
+      "feat_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/333_75_um_zoom_features.npy",
+      "gt_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/333_75_um_zoom_gt.npy",
+      "img_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/333_75_um_zoom_img.npy",
+      "raw_source": "/Users/jiamingzhang/Desktop/260618_b2_333_75_to_339_06/Average_mosaic_260618_B2_333_75_um_zoom_idx00000_mosaictileAA_img001of010.xrm.bim.bim.tif"
+    },
+    {
+      "name": "336_25",
+      "shape": [
+        1688,
+        1693
+      ],
+      "gt_coverage": 0.26996791919893176,
+      "feat_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/336_25_features.npy",
+      "gt_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/336_25_gt.npy",
+      "img_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/336_25_img.npy",
+      "raw_source": "/Users/jiamingzhang/Desktop/260618_b2_333_75_to_339_06/Average_mosaic_260618_b2_336_25_idx00000_mosaictileAA_img001of010.xrm.bim.bim.tif"
+    },
+    {
+      "name": "338_13",
+      "shape": [
+        1706,
+        1693
+      ],
+      "gt_coverage": 0.29740833402002176,
+      "feat_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/338_13_features.npy",
+      "gt_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/338_13_gt.npy",
+      "img_path": "/Users/jiamingzhang/Desktop/TXM_Crack_Detection_Pipeline/code/../dataset_cache/338_13_img.npy",
+      "raw_source": "/Users/jiamingzhang/Desktop/260618_b2_333_75_to_339_06/Average_mosaic_260618_b2_338_13_idx00000_mosaictileAA_img001of010.xrm.bim.bim.tif"
+    }
+  ]
+}

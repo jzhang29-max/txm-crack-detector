@@ -1,0 +1,14 @@
+# TXM Crack Detection — runtime dependencies
+numpy>=1.22
+scipy>=1.9
+scikit-learn>=1.3
+scikit-image>=0.20
+tifffile>=2022.5
+Pillow>=9.0
+joblib>=1.2
+Flask>=2.2
+matplotlib>=3.6          # figures / diagnostics only
+
+# SAM. torch is the large one; CPU-only wheels are fine, a GPU just makes it faster.
+torch>=2.0
+transformers>=4.40

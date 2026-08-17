@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TXM Crack Detection</title>
+<style>
+  :root { --bg:#14151a; --panel:#1c1e26; --line:#2c2f3a; --ink:#e8e8ea; --dim:#9a9ba4;
+          --accent:#3b82f6; --ok:#22a06b; --warn:#d97706; --bad:#dc2626; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system,
+         BlinkMacSystemFont,"Segoe UI",sans-serif; height:100vh; display:flex; }
+  #side { width:330px; min-width:330px; background:var(--panel); border-right:1px solid var(--line);
+          display:flex; flex-direction:column; overflow:hidden; }
+  #main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  h1 { font-size:15px; margin:0; padding:14px 16px; border-bottom:1px solid var(--line); font-weight:600; }
+  .sec { padding:12px 16px; border-bottom:1px solid var(--line); }
+  .sec h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
+            margin:0 0 8px; font-weight:600; }
+  button { background:#2a2d38; color:var(--ink); border:1px solid var(--line); border-radius:6px;
+           padding:7px 11px; font-size:13px; cursor:pointer; }
+  button:hover:not(:disabled) { background:#343845; }
+  button:disabled { opacity:.45; cursor:default; }
+  button.pri { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.ok { background:var(--ok); border-color:var(--ok); color:#fff; }
+  button.on { background:var(--bad); border-color:var(--bad); color:#fff; }
+  #drop { margin:12px 16px; padding:22px 12px; border:2px dashed var(--line); border-radius:10px;
+          text-align:center; color:var(--dim); cursor:pointer; }
+  #drop.hot { border-color:var(--accent); color:var(--ink); background:#1a2436; }
+  #list { flex:1; overflow-y:auto; }
+  .item { padding:9px 16px; border-bottom:1px solid #23252e; cursor:pointer; font-size:12px; }
+  .item:hover { background:#22242d; }
+  .item.sel { background:#1e2a3f; border-left:3px solid var(--accent); padding-left:13px; }
+  .item .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .item .mt { color:var(--dim); font-size:11px; margin-top:2px; }
+  #bar { display:flex; gap:8px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line);
+         flex-wrap:wrap; background:var(--panel); }
+  .grp { font-size:10px; letter-spacing:.09em; color:var(--dim); font-weight:600;
+         min-width:52px; }
+  #retrain { font-weight:600; }
+  #stage { flex:1; overflow:auto; background:#0e0f13; position:relative; }
+  #wrap { position:relative; transform-origin:0 0; }
+  #wrap img, #wrap canvas { position:absolute; top:0; left:0; display:block; }
+  #wrap canvas { cursor:crosshair; }
+  #status { padding:7px 14px; font-size:12px; color:var(--dim); border-top:1px solid var(--line);
+            background:var(--panel); min-height:30px; }
+  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .row + .row { margin-top:7px; }
+  label { font-size:12px; color:var(--dim); }
+  input[type=range] { width:96px; }
+  .kv { font-size:11px; color:var(--dim); line-height:1.7; }
+  .kv b { color:var(--ink); font-weight:500; }
+  #prog { height:3px; background:var(--accent); width:0; transition:width .2s; }
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>TXM Crack Detection</h1>
+  <div id="drop">Drag TXM images here<br><span style="font-size:11px">or click to choose · .tif .tiff .png</span></div>
+  <input type="file" id="file" multiple accept=".tif,.tiff,.png,.jpg" style="display:none">
+  <div class="sec">
+    <h2>Model</h2>
+    <div class="kv" id="modelinfo">loading…</div>
+    <div class="kv" id="corrinfo" style="margin-top:7px"></div>
+  </div>
+  <div class="sec"><h2>Images</h2></div>
+  <div id="list"></div>
+</div>
+
+<div id="main">
+  <div id="bar" style="border-bottom:none;padding-bottom:0">
+    <span class="grp">MODEL</span>
+    <button id="retrain" class="ok">&#9635; Retrain on my corrections</button>
+    <button id="reoverlay">Re-overlay all</button>
+    <button id="rollback">Roll back</button>
+    <span id="corrbrief" style="font-size:12px;color:var(--dim)"></span>
+  </div>
+  <div id="bar">
+    <span class="grp">PAINT</span>
+    <button id="mCrack" class="on">Add crack</button>
+    <button id="mErase">Eraser</button>
+    <button id="mRegion">Remove region</button>
+    <label>Brush <input type="range" id="brush" min="2" max="120" value="24"><span id="brushv">24</span></label>
+    <label>Zoom <input type="range" id="zoom" min="5" max="400" value="100"><span id="zoomv">100%</span></label>
+    <button id="fit">Fit</button>
+    <span style="width:1px;height:20px;background:var(--line)"></span>
+    <span class="grp">VIEW</span>
+    <label><input type="checkbox" id="showmask" checked> Overlay</label>
+    <label title="Blur + shape validation + minimum-size filter. MEASURED COST on ground truth: -0.084 IoU, -0.072 recall, and recall against hand-painted strokes falls from ~0.87 to 0.14-0.40. Off is the better default; on reproduces the older pipeline's output.">
+      <input type="checkbox" id="pp"> Post-process <span style="opacity:.55">(worse: &minus;0.08 IoU)</span></label>
+    <label>Thresh <input type="range" id="thr" min="5" max="95" value="50"><span id="thrv">0.50</span></label>
+    <span style="width:1px;height:20px;background:var(--line)"></span>
+    <span class="grp">EDIT</span>
+    <button id="undo">Undo <span style="opacity:.6">&#8984;Z</span></button>
+    <button id="clear" title="Erase every correction on THIS image and start over. One ⌘Z (Cmd+Z) restores it.">Reset this image</button>
+    <span style="width:1px;height:20px;background:var(--line)"></span>
+    <label style="color:var(--dim)">Download</label>
+    <button id="dlMask">B&amp;W mask</button>
+    <button id="dlOvl">Overlay</button>
+    <button id="dlCsv">CSV</button>
+    <button id="dlAll" class="pri">All as .zip</button>
+  </div>
+  <div id="prog"></div>
+  <div id="stage"><div id="wrap">
+    <img id="base"><img id="ovl"><canvas id="cv"></canvas>
+  </div></div>
+  <div id="status">Drag some images in to begin.</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let IMAGES = [], CUR = null, MODE = "crack", DRAW = false, PTS = [], POLL = null;
+
+const say = (t, c) => { const s = $("#status"); s.textContent = t; s.style.color = c || "var(--dim)"; };
+
+async function j(url, opt) { const r = await fetch(url, opt); return r.json(); }
+
+async function loadModel() {
+  const m = await j("/api/model");
+  $("#modelinfo").innerHTML =
+    `<b>${m.description}</b><br>${m.current.label || ""}` +
+    (m.ground_truth_available ? "" : "<br><span style='color:var(--warn)'>no ground truth — retrain cannot validate</span>");
+}
+
+async function loadList(keep) {
+  const d = await j("/api/images"); IMAGES = d.images || [];
+  const L = $("#list"); L.innerHTML = "";
+  if (!IMAGES.length) L.innerHTML = "<div class='item mt' style='color:var(--dim)'>none yet</div>";
+  for (const im of IMAGES) {
+    const el = document.createElement("div");
+    el.className = "item" + (CUR === im.id ? " sel" : "");
+    const area = im.predicted_area != null ? (im.predicted_area * 100).toFixed(2) + "%" : "—";
+    const cor = im.corrected_crack_px ? ` · ${(im.corrected_crack_px/1000).toFixed(0)}k painted` : "";
+    el.innerHTML = `<div class="nm">${im.filename || im.id}</div>
+      <div class="mt">${im.status === "ready" ? area : im.status}${cor}</div>`;
+    el.onclick = () => show(im.id);
+    L.appendChild(el);
+  }
+  if (!keep && !CUR && IMAGES.length) show(IMAGES[0].id);
+  updateCorrInfo();
+}
+
+// Make the Retrain button's SCOPE visible. It trains on every correction across
+// every image plus the built-in ground truth -- not just the image on screen --
+// and there was previously nothing on screen saying so.
+function updateCorrInfo() {
+  const withCrack = IMAGES.filter(i => i.corrected_crack_px > 0).length;
+  const withNot   = IMAGES.filter(i => i.corrected_not_px > 0).length;
+  const ck = IMAGES.reduce((a,i) => a + (i.corrected_crack_px||0), 0);
+  const nk = IMAGES.reduce((a,i) => a + (i.corrected_not_px||0), 0);
+  const el = $("#corrinfo");
+  if (!ck && !nk) {
+    const b0 = $("#corrbrief"); if (b0) b0.innerHTML = "&larr; paint some corrections first";
+    el.innerHTML = "<span style='color:var(--warn)'>no corrections painted yet</span><br>" +
+                   "Retrain needs some of BOTH: <i>Add crack</i> on real cracks, <i>Eraser</i> or " +
+                   "<i>Remove region</i> on false positives.";
+    $("#retrain").disabled = true;
+    return;
+  }
+  $("#retrain").disabled = false;
+  const bal = (ck && nk) ? "" :
+    "<br><span style='color:var(--warn)'>only one kind painted &mdash; retrain will refuse. " +
+    "Paint some " + (ck ? "<i>Eraser</i>/<i>Remove region</i>" : "<i>Add crack</i>") + " too.</span>";
+  const brief = $("#corrbrief");
+  if (brief) brief.innerHTML = `&larr; uses <b>${(ck/1000).toFixed(0)}k</b> crack + ` +
+      `<b>${(nk/1000).toFixed(0)}k</b> not-crack px from ${Math.max(withCrack, withNot)} image(s)`;
+  el.innerHTML = `Retrain will use <b>all</b> corrections:<br>` +
+    `<b>${(ck/1000).toFixed(0)}k</b> crack px across ${withCrack} image(s)<br>` +
+    `<b>${(nk/1000).toFixed(0)}k</b> not-crack px across ${withNot} image(s)<br>` +
+    `plus the 4 built-in ground-truth images` + bal;
+}
+
+async function show(id) {
+  CUR = id; loadList(true);
+  const im = IMAGES.find(x => x.id === id) || {};
+  if (im.status !== "ready") { say(`${im.filename||id}: ${im.status||"processing"}…`); return; }
+  const w = im.width, h = im.height;
+  $("#wrap").style.width = w + "px"; $("#wrap").style.height = h + "px";
+  for (const el of [$("#base"), $("#ovl")]) { el.style.width = w+"px"; el.style.height = h+"px"; }
+  const cv = $("#cv"); cv.width = w; cv.height = h; cv.style.width = w+"px"; cv.style.height = h+"px";
+  cv.getContext("2d").clearRect(0,0,w,h);
+  $("#base").src = `/api/image/${id}/display.png`;
+  refreshMask();
+  fit();
+  const st = await j(`/api/image/${id}/stats`);
+  say(`${im.filename} · ${w}×${h} (${im.megapixels} MP) · ${(st.area_fraction*100).toFixed(2)}% crack, ${st.n_regions} regions · display: ${im.display||"?"}`);
+}
+
+function refreshMask() {
+  if (!CUR) return;
+  const t = ($("#thr").value/100).toFixed(2), pp = $("#pp").checked ? 1 : 0;
+  $("#ovl").src = `/api/image/${CUR}/mask.png?threshold=${t}&postprocess=${pp}&r=${Date.now()}`;
+  $("#ovl").style.display = $("#showmask").checked ? "block" : "none";
+}
+
+function fit() {
+  const im = IMAGES.find(x => x.id === CUR); if (!im) return;
+  const st = $("#stage");
+  const z = Math.min(st.clientWidth / im.width, st.clientHeight / im.height) * 100;
+  $("#zoom").value = Math.max(5, Math.min(400, Math.floor(z))); applyZoom();
+}
+function applyZoom() {
+  const z = $("#zoom").value / 100;
+  $("#wrap").style.transform = `scale(${z})`;
+  $("#zoomv").textContent = $("#zoom").value + "%";
+}
+
+// ---- painting
+function xy(e) {
+  const cv = $("#cv"), r = cv.getBoundingClientRect();
+  const z = $("#zoom").value / 100;
+  return [(e.clientX - r.left) / z, (e.clientY - r.top) / z];
+}
+function paintDot(x, y) {
+  const ctx = $("#cv").getContext("2d"), r = +$("#brush").value;
+  ctx.fillStyle = MODE === "crack" ? "rgba(60,220,120,0.85)" : "rgba(80,150,255,0.85)";
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+}
+$("#cv").addEventListener("mousedown", async e => {
+  if (!CUR) return;
+  if (MODE === "region") {
+    const [x,y] = xy(e);
+    say("removing region…");
+    const r = await j(`/api/image/${CUR}/flip_region`, {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({x, y, mode:"remove",
+                            threshold: +($("#thr").value/100).toFixed(2),
+                            postprocess: $("#pp").checked})});
+    if (!r.ok) { say(r.error || "nothing there", "var(--warn)"); return; }
+    refreshMask(); loadList(true);
+    say(`removed a ${r.region_px.toLocaleString()} px region · \u2318Z to undo (${r.undo_depth} step${r.undo_depth==1?"":"s"})`, "var(--ok)");
+    return;
+  }
+  DRAW = true; PTS = []; const [x,y]=xy(e); PTS.push([x,y]); paintDot(x,y);
+});
+$("#cv").addEventListener("mousemove", e => { if (!DRAW || MODE === "region") return; const [x,y]=xy(e); PTS.push([x,y]); paintDot(x,y); });
+window.addEventListener("mouseup", async () => {
+  if (!DRAW) return; DRAW = false;
+  if (!PTS.length || !CUR) return;
+  say(`saving ${PTS.length} strokes…`);
+  const r = await j(`/api/image/${CUR}/correction`, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({mode: MODE, points: PTS, radius: +$("#brush").value})});
+  PTS = [];
+  $("#cv").getContext("2d").clearRect(0,0,$("#cv").width,$("#cv").height);
+  refreshMask(); loadList(true);
+  say(`saved · ${(r.crack_px/1000).toFixed(0)}k crack px, ${(r.not_px/1000).toFixed(0)}k not-crack px · \u2318Z to undo (${r.undo_depth} step${r.undo_depth==1?"":"s"})`, "var(--ok)");
+});
+
+// ---- upload
+const drop = $("#drop");
+drop.onclick = () => $("#file").click();
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("hot"); }));
+drop.addEventListener("drop", e => upload(e.dataTransfer.files));
+$("#file").onchange = e => upload(e.target.files);
+
+async function upload(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  say(`uploading ${files.length} file(s)…`);
+  const r = await j("/api/upload", {method:"POST", body: fd});
+  if (!r.ok) { say("upload failed: " + r.error, "var(--bad)"); return; }
+  await loadList(true);
+  if (r.job) watch(r.job, "processing images");
+  else say("already processed — nothing to do");
+}
+
+// ---- jobs
+function watch(jid, what) {
+  clearInterval(POLL);
+  POLL = setInterval(async () => {
+    const s = await j(`/api/job/${jid}`);
+    const pct = s.n ? Math.round(100 * s.k / s.n) : 0;
+    $("#prog").style.width = pct + "%";
+    if (s.state === "running") { say(`${what}: ${s.stage}${s.n?` (${s.k}/${s.n})`:""}`); return; }
+    clearInterval(POLL); $("#prog").style.width = "0";
+    if (s.state === "error") { say(`${what} FAILED — ${s.error}`, "var(--bad)"); console.log(s.trace); return; }
+    const res = s.result || {};
+    if (res.info) {   // retrain
+      let msg = `retrain done in ${s.seconds}s · ${res.info.n_px.toLocaleString()} px, ${res.info.n_features} features, ${(res.info.crack_fraction*100).toFixed(1)}% crack`;
+      if (res.incumbent) msg += ` · IoU ${res.incumbent.iou.toFixed(3)} → ${res.candidate.iou.toFixed(3)}`;
+      msg += res.deployed ? " · DEPLOYED" : ` · not deployed (${res.reason||"gate"})`;
+      say(msg, res.deployed ? "var(--ok)" : "var(--warn)");
+      if (res.warning) console.warn(res.warning);
+      await loadModel();
+      if (res.deployed) {
+        say(msg + " — re-predicting your images with it…", "var(--ok)");
+        const rr = await j("/api/reoverlay", {method:"POST"});
+        watch(rr.job, "re-overlaying with the new model");
+        return;
+      }
+    } else {
+      say(`${what}: done in ${s.seconds}s`, "var(--ok)");
+    }
+    await loadList(true); if (CUR) show(CUR);
+  }, 900);
+}
+
+$("#retrain").onclick = async () => {
+  const ck = IMAGES.reduce((a,i) => a + (i.corrected_crack_px||0), 0);
+  const nk = IMAGES.reduce((a,i) => a + (i.corrected_not_px||0), 0);
+  const ni = IMAGES.filter(i => i.corrected_crack_px || i.corrected_not_px).length;
+  if (!confirm(
+    `Train a new model on EVERY correction you have painted?\n\n` +
+    `  \u2022 ${ck.toLocaleString()} crack pixels\n` +
+    `  \u2022 ${nk.toLocaleString()} not-crack pixels\n` +
+    `  \u2022 across ${ni} image(s), plus the 4 built-in ground-truth images\n\n` +
+    `Takes a few minutes. It is scored against the ground truth and is only ` +
+    `deployed if it does not regress; otherwise your current model is kept.\n\n` +
+    `If it deploys, your images are re-predicted automatically.`)) return;
+  const r = await j("/api/retrain", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+  watch(r.job, "retraining");
+};
+$("#reoverlay").onclick = async () => {
+  const r = await j("/api/reoverlay", {method:"POST"});
+  watch(r.job, "re-overlaying");
+};
+$("#rollback").onclick = async () => {
+  if (!confirm("Restore the previous model?")) return;
+  const r = await j("/api/rollback", {method:"POST"});
+  await loadModel(); say(r.ok ? "rolled back — press Re-overlay all" : "no previous model", r.ok?"var(--ok)":"var(--warn)");
+};
+$("#clear").onclick = async () => {
+  if (!CUR || !confirm("Erase every correction on this image?")) return;
+  await j(`/api/image/${CUR}/correction`, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({mode:"clear"})});
+  refreshMask(); loadList(true); say("corrections cleared");
+};
+function expQuery() {
+  const t = ($("#thr").value/100).toFixed(2), pp = $("#pp").checked ? 1 : 0;
+  return `?threshold=${t}&postprocess=${pp}`;
+}
+$("#dlMask").onclick = () => { if (CUR) window.location = `/api/export/${CUR}/mask.png` + expQuery(); };
+$("#dlOvl").onclick  = () => { if (CUR) window.location = `/api/export/${CUR}/overlay.png` + expQuery(); };
+$("#dlCsv").onclick  = () => { if (CUR) window.location = `/api/export/${CUR}/stats.csv` + expQuery(); };
+$("#dlAll").onclick  = () => { say("building zip — this can take a moment for many images…");
+                               window.location = `/api/export/all.zip` + expQuery(); };
+
+// ---- undo. Two layers: an in-progress stroke is cancelled locally (nothing has
+// been sent yet), otherwise the server pops its delta stack.
+async function doUndo() {
+  if (DRAW && PTS.length) {         // mid-stroke: discard it, nothing was saved
+    DRAW = false; PTS = [];
+    $("#cv").getContext("2d").clearRect(0,0,$("#cv").width,$("#cv").height);
+    say("stroke cancelled"); return;
+  }
+  if (!CUR) return;
+  const r = await j(`/api/image/${CUR}/undo`, {method:"POST"});
+  if (!r.ok) { say("nothing left to undo", "var(--warn)"); return; }
+  refreshMask(); loadList(true);
+  say(`undone · ${(r.crack_px/1000).toFixed(0)}k crack px remain · ${r.undo_depth} more undo step(s)`, "var(--ok)");
+}
+$("#undo").onclick = doUndo;
+window.addEventListener("keydown", e => {
+  const z = (e.key === "z" || e.key === "Z");
+  if (z && (e.metaKey || e.ctrlKey) && !e.shiftKey) { e.preventDefault(); doUndo(); }
+});
+
+function setMode(m) {
+  MODE = m;
+  for (const [k, el] of [["crack","#mCrack"],["erase","#mErase"],["region","#mRegion"]])
+    $(el).classList.toggle("on", k === m);
+  $("#cv").style.cursor = m === "region" ? "pointer" : "crosshair";
+}
+$("#mCrack").onclick  = () => setMode("crack");
+$("#mErase").onclick  = () => setMode("erase");
+$("#mRegion").onclick = () => setMode("region");
+$("#brush").oninput = e => $("#brushv").textContent = e.target.value;
+$("#zoom").oninput = applyZoom;
+$("#fit").onclick = fit;
+$("#showmask").onchange = refreshMask;
+$("#pp").onchange = refreshMask;
+$("#thr").oninput = e => { $("#thrv").textContent = (e.target.value/100).toFixed(2); };
+$("#thr").onchange = refreshMask;
+
+loadModel(); loadList();
+</script>
+</body>
+</html>

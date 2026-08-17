@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+# per-user runtime data: uploads, SAM embeddings, predictions, retrained models
+app_data/
+# unpacked artifacts -- regenerated from the shipped PNG/npz by unpack_package.py
+dataset_cache/*.npy
+paint/corrections/*_correction.npy
