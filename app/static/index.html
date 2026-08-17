@@ -181,7 +181,7 @@ button:disabled{opacity:.4;cursor:default}
         <button data-exp="csv">Measurements (CSV)</button>
         <hr>
         <button data-exp="all"><b>Everything, all images (.zip)</b></button>
-        <div class="hint">Exports what you see now, with your corrections applied.</div>
+        <div class="hint" id="exphint">Exports what you see now, with your corrections applied.</div>
       </div>
     </div>
 
@@ -292,6 +292,11 @@ function scope(){
 async function loadList(keep){
   IMAGES=(await j("/api/images")).images||[];
   $("#ncount").textContent=IMAGES.length?`(${IMAGES.length})`:"";
+  // The zip is a single blocking request with no progress, and at 71 images it is
+  // ~5 minutes and ~600 MB. Saying so beats leaving someone to wonder if it hung.
+  const eh=$("#exphint");
+  if(eh)eh.textContent="Exports what you see now, with your corrections applied."+
+    (IMAGES.length>8?` The .zip covers ${IMAGES.length} images and takes a few minutes.`:"");
   const L=$("#list");L.innerHTML="";
   for(const im of IMAGES){
     const el=document.createElement("div");

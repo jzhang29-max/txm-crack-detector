@@ -257,6 +257,31 @@ def clear_undo(image_id):
         shutil.rmtree(d)
 
 
+def correction_counts(image_id, meta=None):
+    """(force-crack px, force-not px) for one image, memoised in meta.json.
+
+    This used to sum the whole correction array on every call, and list_images() calls
+    it once per image. At 2 images that was 9 ms; at 71 it was 400 ms of summing 205 MB,
+    on an endpoint the frontend hits after EVERY stroke and every 900 ms while a job
+    runs. The counts only change when correction.npy does, so they are cached against
+    that file's mtime -- which means a write by any path (a stroke, an undo, ingest
+    zeroing it, a script) invalidates them without having to remember to update.
+    """
+    p = path(image_id, "correction.npy")
+    if not os.path.exists(p):
+        return 0, 0
+    mt = os.path.getmtime(p)
+    m = meta if meta is not None else read_meta(image_id)
+    c = m.get("corr_counts")
+    if isinstance(c, dict) and c.get("mtime") == mt:
+        return int(c.get("crack", 0)), int(c.get("not", 0))
+    a = np.asarray(np.load(p, mmap_mode="r"))
+    n_crack, n_not = int((a == 1).sum()), int((a == 2).sum())
+    del a
+    write_meta(image_id, dict(corr_counts=dict(crack=n_crack, **{"not": n_not}, mtime=mt)))
+    return n_crack, n_not
+
+
 def list_images():
     out = []
     # Which model the app claims to be using, so each image can be compared against it.
@@ -267,12 +292,7 @@ def list_images():
         m = read_meta(iid)
         if not m:
             continue
-        corr = load_npy(iid, "correction.npy", mmap=True)
-        n_crack = n_not = 0
-        if corr is not None:
-            a = np.asarray(corr)
-            n_crack, n_not = int((a == 1).sum()), int((a == 2).sum())
-            del a
+        n_crack, n_not = correction_counts(iid, meta=m)
         has_prob = os.path.exists(path(iid, "prob.npy"))
         # A model switch flips the registry first and predicts afterwards, so if that
         # job dies or the app is quit mid-pass, some images still hold the previous

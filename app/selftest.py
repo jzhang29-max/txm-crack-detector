@@ -381,23 +381,36 @@ def main():
         cur = next((m for m in models if m.get("current")), None)
         check("model list offers the current model", cur is not None,
               f"{len(models)} model(s): " + ", ".join(m["label"] for m in models[:3]))
+        # Only switch to a model that is ALREADY cached for every loaded image.
+        # Switching to an uncached one queues a real prediction pass, which is the
+        # correct product behaviour but a terrible test: with 71 images loaded this
+        # test spent 48 minutes re-predicting the whole library, and left the app on
+        # a different model while it did. Testing "cached switches are instant"
+        # requires a cached model, so if there is not one, say so and move on.
+        ready = [m for m in models
+                 if not m.get("current") and m.get("cached_for") == m.get("n_images")]
         others = [m for m in models if not m.get("current")]
         if not others:
             skip("switching models is instant when cached",
                  "only one model exists until you retrain")
+        elif not ready:
+            skip("switching models is instant when cached",
+                 f"{len(others)} other model(s) exist but none is computed for all "
+                 f"{cur.get('n_images')} image(s); switching would queue a real "
+                 f"prediction pass rather than exercise the cache")
         else:
-            # Switch away and back; the trip back must need no prediction job because
-            # the current model's result for this image is already on disk.
+            # Switch away and back; both trips must need no prediction job because
+            # every image's result for both models is already on disk.
             t0 = time.time()
             _, away = req(B, "/api/model/select", "POST",
-                          dict(id=others[0]["id"], focus=iid), timeout=120)
-            if away.get("job"):
-                wait_job(B, away["job"], "predict with other model")
+                          dict(id=ready[0]["id"], focus=iid), timeout=120)
             _, back = req(B, "/api/model/select", "POST", dict(id=cur["id"]), timeout=120)
             dt = time.time() - t0
             check("switching models is instant when cached",
-                  back.get("ok") is True and not back.get("job") and len(back.get("instant") or []) >= 1,
-                  f"return trip needed no prediction job ({len(back.get('instant') or [])} from cache)")
+                  away.get("ok") is True and not away.get("job")
+                  and back.get("ok") is True and not back.get("job"),
+                  f"round trip in {dt:.2f}s with no prediction job, "
+                  f"{len(back.get('instant') or [])} image(s) from cache")
             check("switching back restores the original model",
                   S_label(back) == cur["label"], f"{S_label(back)}")
     except Exception as e:

@@ -551,21 +551,40 @@ def _stats_csv_bytes(iid, mask):
             "BranchPointCount", "MajorAxisLength_px", "MinorAxisLength_px",
             "Orientation_deg", "BoundaryRoughness", "CentroidX_px", "CentroidY_px"]
     w.writerow(cols)
+    # One regionprops pass, then work inside each region's bounding box.
+    #
+    # This loop used to be `for gid in 1..n_groups: sub = groups == gid`, which is a
+    # full-frame comparison, a full-frame sum and a full-frame nonzero PER REGION, and
+    # it then handed that full-frame mask to the measurement code, which cropped it
+    # again -- also full-frame. Cost was O(regions x image area) rather than
+    # O(crack area). Measured before this change: 3.7 s for a 2.9 MP image, 69 s at
+    # 10.4 MP, and 563 s -- nine and a half minutes -- for the 32 MP mosaic, which made
+    # "export everything" unusable across 71 images.
+    #
+    # regionprops gives area, centroid and a bbox slice from a single pass. The window
+    # passed on is the bbox grown by 2 px, which is exactly what _local_crop(margin=2)
+    # would have produced from the full frame, so the numbers are unchanged -- the
+    # measurement functions use only region-relative quantities.
+    H, W = mask.shape
+    MARGIN = 2
     rows = []
-    for gid in range(1, n_groups + 1):
-        sub = groups == gid
-        n = int(sub.sum())
+    for p in skmeasure.regionprops(groups):
+        n = int(p.area)
         if n < 5:
             continue          # skeletonize/regionprops need a few px to mean anything
+        y0, y1, x0, x1 = p.bbox[0], p.bbox[2], p.bbox[1], p.bbox[3]
+        y0, y1 = max(0, y0 - MARGIN), min(H, y1 + MARGIN)
+        x0, x1 = max(0, x0 - MARGIN), min(W, x1 + MARGIN)
+        sub = groups[y0:y1, x0:x1] == p.label
         if crack_shape_measurements is not None:
             d = crack_shape_measurements(sub)
         else:
             d = dict(Area_px=n)
-        ys, xs = np.nonzero(sub)
-        d.update(SourceImage=m.get("filename", iid), CrackID=gid,
+        cy, cx = p.centroid                      # already in full-image coordinates
+        d.update(SourceImage=m.get("filename", iid), CrackID=int(p.label),
                  AreaPct_of_image=round(100.0 * n / img_area, 4),
-                 CentroidX_px=round(float(xs.mean()), 1),
-                 CentroidY_px=round(float(ys.mean()), 1))
+                 CentroidX_px=round(float(cx), 1),
+                 CentroidY_px=round(float(cy), 1))
         rows.append(d)
     for d in sorted(rows, key=lambda r: -r.get("Area_px", 0)):
         w.writerow([d.get(c, "") for c in cols])
