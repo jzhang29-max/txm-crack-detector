@@ -3,28 +3,37 @@
 Detects cracks in transmission X-ray microscopy images. Drag images in, look at
 what the model found, fix what it got wrong, press Retrain. That is the whole loop.
 
-## Install
+## Run it
+
+One command. Nothing to install first, nothing to configure:
 
 ```bash
-git clone <this-repo>
-cd TXM_Crack_Detection_Pipeline
-python3 -m pip install -r requirements.txt
+git clone https://github.com/jzhang29-max/txm-crack-detector.git && cd txm-crack-detector && ./run_app.sh
 ```
 
-Python 3.9+. Apple Silicon, CUDA and CPU-only all work; a GPU makes the SAM step
-~10x faster but nothing requires one.
+Then open **http://127.0.0.1:8800**.
 
-## Run
+That script creates its own virtualenv, installs dependencies, expands the bundled
+reference data, and serves the app. Re-running it later just starts the app -- it
+notices the venv already exists and that requirements have not changed.
+
+Python 3.9+ is the only prerequisite. Apple Silicon, CUDA and CPU-only all work; a
+GPU makes the SAM step ~10x faster but nothing requires one. `PORT=9000 ./run_app.sh`
+if 8800 is taken.
+
+Two things happen once, not on every start:
+
+- **SAM ViT-H (~2.4 GB)** downloads from HuggingFace on the first prediction and
+  caches in `~/.cache/huggingface`.
+- **Reference feature stacks (2.1 GB)** are computed on the first *Retrain*, not at
+  startup -- nothing else reads them, and building them eagerly used to add several
+  silent minutes before the app would serve.
+
+To check your install rather than trust it:
 
 ```bash
-python3 app/server.py
+python3 app/selftest.py
 ```
-
-Open **http://127.0.0.1:8800**.
-
-On the very first prediction it downloads Meta's SAM ViT-H (~2.4 GB) from
-HuggingFace and caches it in `~/.cache/huggingface`. That happens once. Set
-`PORT=9000` to use a different port.
 
 ## Using it
 
@@ -35,12 +44,37 @@ HuggingFace and caches it in `~/.cache/huggingface`. That happens once. Set
    destitched + flat-fielded version, because real cracks are thin and faint and
    are often invisible in raw; the *model* is fed raw, which is what it was
    trained on. Both corrections preserve geometry, so the mask registers exactly.
-3. **Correct.** *Add crack* paints crack, *Eraser* removes it. Brush size and
-   zoom are on the toolbar. Strokes save on mouse-up.
-4. **Retrain on my corrections.** Trains a new model on every correction you have
-   painted across every image, validates it, and deploys it only if it does not
-   regress. Then **Re-overlay all** re-predicts your images with it.
-5. **Export mask** downloads the final mask as a PNG (crack = black).
+3. **Correct.** Three tools, and the difference between the last two is the
+   gesture:
+
+   | tool | gesture | what it does |
+   |---|---|---|
+   | **Add crack** | drag | paints crack the model missed |
+   | **Erase** | drag | removes *only the pixels your brush passes over* |
+   | **Delete region** | one click | removes *an entire connected blob* of the result |
+
+   Use Erase for trimming an edge or thinning a stroke. Use Delete region for a
+   false positive too big to brush out -- one click takes the whole thing. The
+   status bar restates this whenever you switch tools.
+
+   Every stroke saves itself the moment you release the mouse. There is no save
+   button and nothing is held in the browser: the correction is on disk before the
+   request returns, verified by killing the server mid-session and restarting.
+   `Cmd+Z` / `Ctrl+Z` undoes one stroke at a time, 30 deep, and survives a restart.
+4. **Retrain.** Trains on every correction you have painted across every image,
+   validates against the reference ground truth, and deploys only if it does not
+   regress. When it deploys it **re-applies the new model to all your images inside
+   the same job**, so you do not have to press anything else and nothing is lost if
+   you close the tab while it runs.
+5. **Switch models** with the dropdown in the bottom-left. It lists the shipped
+   baseline plus every model you have retrained, and says which are `ready`.
+   Switching to a model already computed for your images is instant -- predictions
+   are cached per (image, model) and hard-linked, so N models cost N predictions on
+   disk rather than 2N. A model that has not seen an image yet gets a prediction
+   pass, and the image you are looking at goes first in the queue.
+6. **Export** gives the B&W mask, the overlay, per-crack measurements as CSV, or
+   everything for every image as a zip. Exports honour the sensitivity you are
+   viewing, so what you see is what you get.
 
 Nothing here needs a config file edited or a script run in the right order.
 

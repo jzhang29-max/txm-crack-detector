@@ -36,10 +36,15 @@ fi
 
 mkdir -p app_data/images app_data/models models dataset_cache paint/corrections
 
-# Expand the compressed ground truth / corrections a distributed checkout ships
-# with, and build the 17-feature stacks that were deliberately not shipped.
+# Expand the compressed ground truth / corrections a distributed checkout ships with.
 # Idempotent -- a no-op on every run after the first.
-python3 code/unpack_package.py || echo "==> WARNING: unpack step failed; retrain validation may be unavailable"
+#
+# --skip-features on purpose: the 17-feature reference stacks are 2.1 GB and take
+# minutes to compute, and NOTHING except retraining reads them. Building them here
+# meant the first `./run_app.sh` sat silently for several minutes before serving.
+# pipeline.ensure_gt_features() builds them on the first Retrain instead, with
+# progress in the UI.
+python3 code/unpack_package.py --skip-features || echo "==> WARNING: unpack step failed; retrain validation may be unavailable"
 
 # SAM is optional in the sense that the app still runs without it -- it falls back
 # to the 17-feature model alone. Say so rather than crashing on first predict.

@@ -147,11 +147,15 @@ def api_thumb(iid):
     cache = S.path(iid, f"thumb_{W}.png")
     corr_p = S.path(iid, "correction.npy")
     prob_p = S.path(iid, "prob.npy")
+    # Same stamp-before-render / strict-< rule as api_mask, and for the same reason:
+    # stamping after the work makes an edit that landed mid-render look older than the
+    # render that missed it, and a tie must count as stale.
     fresh = (os.path.exists(cache)
-             and all(not os.path.exists(p) or os.path.getmtime(p) <= os.path.getmtime(cache)
+             and all(not os.path.exists(p) or os.path.getmtime(p) < os.path.getmtime(cache)
                      for p in (corr_p, prob_p)))
     if fresh:
         return send_file(cache, mimetype="image/png")
+    stamp = max([os.path.getmtime(p) for p in (corr_p, prob_p) if os.path.exists(p)] or [0])
 
     disp = S.load_npy(iid, "display.npy")
     if disp is None:
@@ -168,13 +172,44 @@ def api_thumb(iid):
     h = max(1, round(W * im.size[1] / im.size[0]))
     im = im.resize((W, h), Image.LANCZOS)
     im.save(cache, format="PNG", optimize=True)
+    if stamp:
+        os.utime(cache, (stamp + 1e-6, stamp + 1e-6))
     return send_file(cache, mimetype="image/png")
 
 
 @app.route("/api/image/<iid>/mask.png")
 def api_mask(iid):
+    """The red overlay the user paints on top of.
+
+    Cached on disk. This is the single most-requested endpoint in the app -- every
+    stroke, every sensitivity change and every image switch fetches it, with a
+    cache-busting query so the browser never serves it from memory -- and it was
+    recomputing effective_mask and re-encoding a full H x W RGBA PNG each time.
+    Cheap at 2.9 MP (~40 ms) but the 23 MP mosaic reads a 94 MB prob.npy per request.
+    The output depends only on (prediction, corrections, threshold, post-process), so
+    it is safe to keep and cheap to invalidate by mtime.
+    """
     thr = float(request.args.get("threshold", 0.5))
     pp = request.args.get("postprocess", "0") in ("1", "true", "True")
+
+    tag = f"{thr:.2f}_{1 if pp else 0}"
+    cache = S.path(iid, "overlays", f"{tag}.png")
+    srcs = [S.path(iid, "prob.npy"), S.path(iid, "correction.npy")]
+    # Strictly older, not "not newer". Filesystem timestamps are coarse enough that an
+    # input written immediately after the stamp below can land on the SAME mtime, and
+    # on a tie <= would call the cache fresh and serve a render that predates the edit.
+    # Erring the other way costs one redundant render and can never show a stale mask.
+    if os.path.exists(cache) and all(
+            not os.path.exists(p) or os.path.getmtime(p) < os.path.getmtime(cache) for p in srcs):
+        return send_file(cache, mimetype="image/png")
+
+    # Stamp the cache with the inputs' mtimes as they were BEFORE the render, not with
+    # the time the render finished. Rendering the 23 MP mosaic takes long enough for a
+    # stroke or a model switch to land midway; stamping afterwards would make the
+    # cache file newer than the input it did not include, so the stale overlay would
+    # pass the freshness test above forever -- surviving reloads and restarts.
+    stamp = max([os.path.getmtime(p) for p in srcs if os.path.exists(p)] or [0])
+
     mask = P.effective_mask(iid, threshold=thr, postprocess=pp)
     if mask is None:
         return jsonify(ok=False, error="no prediction"), 404
@@ -184,8 +219,34 @@ def api_mask(iid):
     rgba[mask] = (230, 40, 40, 140)
     buf = io.BytesIO()
     Image.fromarray(rgba, mode="RGBA").save(buf, format="PNG", compress_level=1)
-    buf.seek(0)
-    return send_file(buf, mimetype="image/png")
+    data = buf.getvalue()
+
+    # Write through a temp file: two browsers requesting different thresholds at once
+    # must not leave a half-written PNG that later looks fresh by mtime.
+    try:
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        tmp = cache + f".{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, cache)
+        if stamp:
+            # Nudge one microsecond past the inputs so an unmodified image still hits
+            # the strict-< test above, while anything written after the stamp does not.
+            os.utime(cache, (stamp + 1e-6, stamp + 1e-6))
+        _prune_dir(os.path.dirname(cache), keep=10)
+    except OSError:
+        pass                                    # a cache we cannot write is not fatal
+    return send_file(io.BytesIO(data), mimetype="image/png")
+
+
+def _prune_dir(d, keep):
+    try:
+        files = sorted((os.path.join(d, f) for f in os.listdir(d) if f.endswith(".png")),
+                       key=os.path.getmtime, reverse=True)
+        for p in files[keep:]:
+            os.remove(p)
+    except OSError:
+        pass
 
 
 @app.route("/api/image/<iid>/stats")
@@ -338,6 +399,63 @@ def api_reoverlay():
             done.append(iid)
         return dict(reoverlayed=done)
     return jsonify(ok=True, job=_job(work, f"re-overlay {len(ids)} image(s)"))
+
+
+@app.route("/api/models")
+def api_models():
+    """Every model the user can switch to, and whether switching would be instant."""
+    ids = [m["id"] for m in S.list_images()]
+    out = []
+    for e in S.available_models():
+        for iid in ids:
+            S.migrate_prob_cache(iid)
+        ready = sum(1 for iid in ids if S.has_prob_for(iid, e["id"]))
+        out.append(dict(id=e["id"], label=e.get("label") or e["id"],
+                        created=e.get("created"), kind=e.get("kind", "ensemble"),
+                        current=e["current"], cached_for=ready, n_images=len(ids)))
+    return jsonify(ok=True, models=out)
+
+
+@app.route("/api/model/select", methods=["POST"])
+def api_model_select():
+    """Switch models. Instant for any image whose prediction is already cached.
+
+    Images that have not been run through this model still need a real prediction, so
+    those are handed to a background job -- and the one the user is looking at goes
+    first, because that is the one they are waiting on.
+    """
+    d = request.get_json(force=True, silent=True) or {}
+    want = d.get("id")
+    entry = next((e for e in S.available_models() if e["id"] == want), None)
+    if entry is None:
+        return jsonify(ok=False, error="unknown model"), 404
+
+    S.set_current({k: v for k, v in entry.items() if k not in ("id", "current")},
+                  remember=False)
+    P._model_cache["key"] = None
+
+    instant, todo = [], []
+    for m in S.list_images():
+        iid = m["id"]
+        S.migrate_prob_cache(iid)
+        (instant if S.adopt_prob(iid, want) else todo).append(iid)
+
+    focus = d.get("focus")
+    if focus in todo:                                  # predict what is on screen first
+        todo.remove(focus)
+        todo.insert(0, focus)
+
+    jid = None
+    if todo:
+        def work(report):
+            for k, iid in enumerate(todo, 1):
+                report(f"{iid} ({k}/{len(todo)})", k, len(todo))
+                P.ingest(iid, progress=lambda st, a, b: report(f"{iid}: {st}", a, b))
+            return dict(predicted=todo)
+        jid = _job(work, f"predict {len(todo)} image(s) with {entry.get('label')}")
+
+    return jsonify(ok=True, current=S.registry()["current"], instant=instant,
+                   pending=todo, job=jid)
 
 
 @app.route("/api/rollback", methods=["POST"])

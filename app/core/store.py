@@ -259,6 +259,8 @@ def clear_undo(image_id):
 
 def list_images():
     out = []
+    # Which model the app claims to be using, so each image can be compared against it.
+    cur_key = model_key(registry().get("current"))
     for iid in sorted(os.listdir(IMAGES)) if os.path.isdir(IMAGES) else []:
         if not os.path.isdir(path(iid)):
             continue
@@ -271,8 +273,18 @@ def list_images():
             a = np.asarray(corr)
             n_crack, n_not = int((a == 1).sum()), int((a == 2).sum())
             del a
-        m.update(has_prob=os.path.exists(path(iid, "prob.npy")),
+        has_prob = os.path.exists(path(iid, "prob.npy"))
+        # A model switch flips the registry first and predicts afterwards, so if that
+        # job dies or the app is quit mid-pass, some images still hold the previous
+        # model's prediction. Reporting them as plain "ready" is what made that
+        # invisible: the picker said model B while the mask was model A's. This says
+        # so per image, and is derived from what is on disk rather than from whether
+        # a job reported success.
+        img_key = m.get("model_key")
+        m.update(has_prob=has_prob,
                  has_emb=os.path.exists(path(iid, "emb.npz")),
+                 model_key=img_key, current_model_key=cur_key,
+                 stale=bool(has_prob and img_key and img_key != cur_key),
                  corrected_crack_px=n_crack, corrected_not_px=n_not)
         out.append(m)
     return out
@@ -311,13 +323,198 @@ def registry():
         return _default_registry()
 
 
-def set_current(entry):
+def model_key(entry):
+    """Short stable id for one model, used to name its cached predictions.
+
+    A retrain stamp is unique per model, so it is the natural key. Entries without one
+    (the shipped baseline, or a hand-configured entry) are keyed by their files'
+    paths AND size+mtime -- not paths alone. Paths alone were wrong: the training
+    scripts overwrite models/pixel_sam_hybrid.joblib in place, so a genuinely new
+    model kept the old key, every image looked "ready" for it, and the app served the
+    previous model's predictions while reporting the new one as current.
+    """
+    entry = entry or {}
+    base = entry.get("created") or ""
+    if not base:
+        ident = []
+        for p in (entry.get("path_17"), entry.get("path_hybrid")):
+            try:
+                st = os.stat(p)
+                ident.append([p, st.st_size, int(st.st_mtime)])
+            except (OSError, TypeError):
+                ident.append([p, None, None])
+        ident.append(entry.get("kind"))
+        base = "m" + hashlib.sha1(json.dumps(ident, sort_keys=True).encode()).hexdigest()[:10]
+    return "".join(c if (c.isalnum() or c in "-_") else "_" for c in str(base))[:40]
+
+
+def set_current(entry, remember=True):
+    """Make `entry` the current model.
+
+    remember=False is for switching between models the user already has: the old
+    current still goes into history, but the entry being selected is pulled OUT of
+    history so it is not listed twice, and re-selecting the same model is a no-op.
+    Without this, flipping between two models a few times grew the history list with
+    duplicate copies of both.
+    """
     r = registry()
-    if r.get("current"):
-        r.setdefault("history", []).append(r["current"])
+    cur = r.get("current")
+    if cur and model_key(cur) == model_key(entry):
+        return r
+    hist = r.setdefault("history", [])
+    if cur and not any(model_key(h) == model_key(cur) for h in hist):
+        hist.append(cur)
+    if not remember:
+        r["history"] = [h for h in hist if model_key(h) != model_key(entry)]
     r["current"] = entry
     write_json(REGISTRY, r)
     return r
+
+
+def available_models():
+    """Every model the user can pick: the current one, everything in history, and
+    the shipped baseline even if it has never been current.
+
+    Ordered current-first, then newest retrain to oldest, with the unstamped shipped
+    baseline last. History order depends on how the user happened to switch around,
+    which is not a sensible order to present.
+    """
+    r = registry()
+    others = sorted((r.get("history") or []),
+                    key=lambda e: (e.get("created") or ""), reverse=True)
+    out, seen = [], set()
+    for e in [r.get("current")] + others + [_default_registry()["current"]]:
+        if not e:
+            continue
+        k = model_key(e)
+        if k in seen:
+            continue
+        # Do not offer a model whose files are not all present. CrackModel silently
+        # degrades when a path is missing -- drop path_hybrid and it predicts with the
+        # 17-feature model alone -- so offering a half-present entry would mean the
+        # user picks "retrained X" and gets something else, cached under X's key.
+        # Requiring EVERY declared path to exist, not just one of them, is the point.
+        declared = [p for p in (e.get("path_17"), e.get("path_hybrid")) if p]
+        if not declared or not all(os.path.exists(p) for p in declared):
+            continue
+        seen.add(k)
+        out.append(dict(e, id=k, current=(k == model_key(r.get("current")))))
+    return out
+
+
+# ------------------------------------------------- per-model prediction cache
+# Switching models has to feel instant, and a prediction is a pure function of
+# (image, model), so it is cacheable forever. prob.npy stays "the current model's
+# prediction" -- every other module already reads it -- and is HARD LINKED to the
+# cache entry rather than copied, so keeping N models per image costs N predictions
+# on disk, not 2N. save_npy writes via temp+rename, which replaces the link target
+# instead of writing through it, so a later write can never corrupt a cache entry.
+PROB_CACHE_KEEP = 6
+
+
+def _prob_cache_dir(image_id):
+    d = path(image_id, "probs")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def prob_cache_path(image_id, key):
+    return os.path.join(_prob_cache_dir(image_id), f"{key}.npy")
+
+
+def has_prob_for(image_id, key):
+    return os.path.exists(prob_cache_path(image_id, key))
+
+
+def _link_or_copy(src, dst):
+    """Publish src at dst atomically, sharing the inode where the filesystem allows.
+
+    The staging name is unique per process AND thread. A single fixed "<dst>.tmp" was a
+    real hazard: two threads publishing prob.npy at once (a predict job finishing while
+    the user picks a model) could have one link its source and the other replace it, so
+    prob.npy ended up holding the wrong model's array. Worse, the copy fallback would
+    open that shared temp name "wb" while it was still a hard link to a cache entry --
+    truncating that entry and poisoning it for every future switch.
+    """
+    tmp = f"{dst}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.link(src, tmp)                       # same inode: no extra disk
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        shutil.copyfile(src, tmp)               # different device, or links unsupported
+    os.replace(tmp, dst)
+
+
+def store_prob(image_id, key, arr):
+    """Write a prediction into the cache and make it the live prob.npy."""
+    p = prob_cache_path(image_id, key)
+    tmp = p + ".tmp"
+    try:
+        with open(tmp, "wb") as fh:
+            np.save(fh, arr)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    _link_or_copy(p, path(image_id, "prob.npy"))
+    _prune_prob_cache(image_id, keep_key=key)
+    write_meta(image_id, dict(model_key=key))
+
+
+def adopt_prob(image_id, key):
+    """Point prob.npy at an already-computed prediction. True if the cache had it."""
+    p = prob_cache_path(image_id, key)
+    if not os.path.exists(p):
+        return False
+    _link_or_copy(p, path(image_id, "prob.npy"))
+    os.utime(p, None)                           # mark as recently used for pruning
+    write_meta(image_id, dict(model_key=key))
+    return True
+
+
+def migrate_prob_cache(image_id):
+    """Seed the cache from a pre-cache prob.npy, once, and only when we KNOW its author.
+
+    Only migrates when meta.json records which model produced the file. It used to fall
+    back to "assume the current model", which is a guess that silently becomes a lie:
+    if the file was actually an older model's output, it got filed under the current
+    model's key, and every later request adopted it -- so the app would report the new
+    model as ready for that image while showing the old model's mask, and no retrain or
+    re-apply would ever correct it. An unlabelled file is left alone instead; the cost
+    is one honest re-prediction, which is strictly better than a wrong cache entry.
+    """
+    live = path(image_id, "prob.npy")
+    if not os.path.exists(live) or os.listdir(_prob_cache_dir(image_id)):
+        return False
+    key = read_meta(image_id).get("model_key")
+    if not key:
+        return False
+    _link_or_copy(live, prob_cache_path(image_id, key))
+    return True
+
+
+def _prune_prob_cache(image_id, keep_key=None):
+    """Bound the cache: a 23 MP prediction is 94 MB, so this is not free."""
+    d = _prob_cache_dir(image_id)
+    files = [f for f in os.listdir(d) if f.endswith(".npy")]
+    if len(files) <= PROB_CACHE_KEEP:
+        return
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(d, f)), reverse=True)
+    for f in files[PROB_CACHE_KEEP:]:
+        if keep_key and f == f"{keep_key}.npy":
+            continue
+        try:
+            os.remove(os.path.join(d, f))
+        except OSError:
+            pass
 
 
 def rollback():

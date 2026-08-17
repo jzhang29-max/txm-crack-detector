@@ -146,6 +146,22 @@ def ingest(image_id, progress=None, force=False):
             S.write_meta(image_id, dict(display=f"raw (preprocessing failed: {type(e).__name__})"))
 
     mdl = get_model()
+    mkey = S.model_key(S.registry().get("current"))
+
+    # A prediction is a pure function of (image, model), so if this model has already
+    # been run on this image the answer is on disk. Adopting it turns switching
+    # models from minutes of re-prediction into a hard link.
+    S.migrate_prob_cache(image_id)
+    if not force and S.adopt_prob(image_id, mkey):
+        rep("using cached prediction")
+        if S.load_npy(image_id, "correction.npy", mmap=True) is None:
+            S.save_npy(image_id, "correction.npy", np.zeros(img01.shape, np.uint8))
+        cached = S.load_npy(image_id, "prob.npy", mmap=True)
+        S.write_meta(image_id, dict(status="ready", model=mdl.describe(),
+                                    predicted_area=float((np.asarray(cached) > 0.5).mean()),
+                                    ingested=time.time()))
+        return True
+
     if mdl.needs_sam() and (force or not os.path.exists(S.path(image_id, "emb.npz"))):
         rep("SAM embedding")
         coords, emb = M.embed_image(img01, progress=lambda k, n: rep("SAM embedding", k, n))
@@ -158,7 +174,7 @@ def ingest(image_id, progress=None, force=False):
         z = np.load(S.path(image_id, "emb.npz"))
         emb = (z["coords"], z["emb"])
     prob = mdl.predict(img01, emb=emb, progress=lambda st, k, n: rep(st, k, n))
-    S.save_npy(image_id, "prob.npy", prob.astype(np.float32))
+    S.store_prob(image_id, mkey, prob.astype(np.float32))
 
     if S.load_npy(image_id, "correction.npy", mmap=True) is None:
         S.save_npy(image_id, "correction.npy", np.zeros(img01.shape, np.uint8))
@@ -203,6 +219,37 @@ def effective_mask(image_id, threshold=0.5, postprocess=False):
 def _gt_available():
     return all(os.path.exists(os.path.join(GT_CACHE, f"{s}_{k}.npy"))
                for s in GT_STEMS for k in ("img", "gt"))
+
+
+def ensure_gt_features(progress=None):
+    """Build the reference 17-feature stacks if they are missing. Returns what it built.
+
+    These are 2.1 GB (1.5 GB of it for the 23 MP mosaic) and a pure function of the
+    images, so they are neither shipped nor built at startup -- doing it on first run
+    added minutes to `./run_app.sh` for something only retraining ever reads. They are
+    built here instead, once, with progress, on the first retrain.
+
+    This has to happen BEFORE the bootstrap loop below, which skips any stem whose
+    feature file is absent. That skip is silent, and dropping the ground truth from
+    training is precisely the failure that once produced a 100%-crack model scoring
+    IoU 0.003 -- so "build it on demand" and "skip it quietly" must not be confused.
+    """
+    from txm_features import compute_feature_stack
+    built = []
+    for stem in GT_STEMS:
+        img_p = os.path.join(GT_CACHE, f"{stem}_img.npy")
+        feat_p = os.path.join(GT_CACHE, f"{stem}_features.npy")
+        if os.path.exists(feat_p) or not os.path.exists(img_p):
+            continue
+        if progress:
+            progress(f"preparing reference features: {stem} (first retrain only)", 0, 1)
+        img = np.load(img_p)
+        tmp = feat_p + ".tmp.npy"
+        np.save(tmp, compute_feature_stack(img).astype(np.float32))
+        os.replace(tmp, feat_p)                 # never leave a partial stack behind
+        del img
+        built.append(stem)
+    return built
 
 
 GT_EMB_DIR = os.path.join(S.DATA, "gt_emb")
@@ -392,6 +439,10 @@ def retrain(deploy=True, progress=None):
     from sklearn.preprocessing import StandardScaler
 
     t0 = time.time()
+    # Built here rather than at startup, so a fresh clone is running in seconds and
+    # only pays for this the first time it retrains. Must precede gather_training_data,
+    # whose ground-truth loop skips stems with no feature stack.
+    built = ensure_gt_features(progress=progress)
     if progress:
         progress("gathering labels", 0, 1)
     X, y, w, info = gather_training_data(progress=progress)
@@ -438,6 +489,7 @@ def retrain(deploy=True, progress=None):
     joblib.dump(bundle, out)
 
     result = dict(ok=True, path=out, info=info, warning=warn,
+                  built_features=built or None,
                   seconds=round(time.time() - t0, 1))
 
     if not _gt_available():

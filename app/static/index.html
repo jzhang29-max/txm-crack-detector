@@ -63,15 +63,25 @@ button:disabled{opacity:.4;cursor:default}
 #modelcard .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink3)}
 #modelcard .v{font-size:12px;margin-top:3px}
 #modelcard .v b{font-weight:600}
+#mpick{width:100%;margin:6px 0 7px;padding:6px 8px;font:inherit;font-size:12px;
+  color:var(--ink);background:var(--surface2);border:1px solid var(--line2);
+  border-radius:6px;cursor:pointer}
+#mpick:hover{border-color:#3d4552}
+#mpick:disabled{opacity:.5;cursor:default}
 #scope{font-size:11.5px;color:var(--ink3);margin-top:8px;line-height:1.5}
 
 /* ---------------- main ---------------- */
 #main{flex:1;display:flex;flex-direction:column;min-width:0}
+/* wrap onto a second row when narrow rather than squeezing the controls: squeezing
+   broke each tool label onto three lines, making the toolbar 99px tall at an 850px
+   window. With .seg buttons set to nowrap they stay one line and the row wraps. */
 #top{display:flex;align-items:center;gap:14px;padding:11px 18px;background:var(--surface);
-  border-bottom:1px solid var(--line)}
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
 .seg{display:inline-flex;background:var(--surface2);border:1px solid var(--line2);
   border-radius:var(--r);overflow:hidden}
-.seg button{border:0;border-radius:0;background:transparent;padding:7px 13px;font-size:13px;color:var(--ink2)}
+.seg{flex:0 0 auto}
+.seg button{border:0;border-radius:0;background:transparent;padding:7px 13px;font-size:13px;
+  color:var(--ink2);white-space:nowrap}
 .seg button+button{border-left:1px solid var(--line2)}
 .seg button.on{background:var(--brand);color:#fff;font-weight:500}
 .seg button:hover:not(.on){background:#232833;color:var(--ink)}
@@ -130,7 +140,8 @@ button:disabled{opacity:.4;cursor:default}
   <div id="list"></div>
 
   <div id="modelcard">
-    <div class="k">Current model</div>
+    <div class="k">Model</div>
+    <select id="mpick" title="Switch models. Already-computed results appear instantly."></select>
     <div class="v" id="mdesc">loading…</div>
     <div id="scope"></div>
   </div>
@@ -138,10 +149,14 @@ button:disabled{opacity:.4;cursor:default}
 
 <main id="main">
   <div id="top">
+    <!-- "Delete region" rather than the old "Remove area": the two removal tools differ
+         only in scope, and the name is the only thing that can say so at a glance.
+         Erase is a brush and takes what you drag over; Delete region is one click and
+         takes a whole connected blob. Tooltips and the status-bar hint spell it out. -->
     <div class="seg" id="tools">
-      <button data-mode="crack" class="on">Add crack</button>
-      <button data-mode="erase">Erase</button>
-      <button data-mode="region">Remove area</button>
+      <button data-mode="crack" class="on" title="Drag to add crack the model missed">Add crack</button>
+      <button data-mode="erase" title="Drag to erase just the pixels your brush covers">Erase</button>
+      <button data-mode="region" title="Click once to delete a whole connected blob of the result">Delete region</button>
     </div>
 
     <label class="fld" style="gap:7px"><input type="checkbox" id="showmask" checked> Show result</label>
@@ -173,6 +188,7 @@ button:disabled{opacity:.4;cursor:default}
       <div class="fld">Sensitivity <input type="range" id="thr" min="5" max="95" value="50"><span class="num" id="thrv">0.50</span></div>
       <label class="fld" style="gap:7px"><input type="checkbox" id="pp"> Legacy post-processing</label>
       <div class="sp"></div>
+      <button class="ghost" id="reapply" title="Re-predict every image with the current model">Re-apply model</button>
       <button class="ghost" id="undo2">Undo <span class="kbd">⌘Z</span></button>
       <button class="ghost danger" id="reset">Reset image</button>
       <button class="ghost danger" id="del">Remove from list</button>
@@ -191,7 +207,7 @@ button:disabled{opacity:.4;cursor:default}
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let IMAGES=[],CUR=null,MODE="crack",DRAW=false,PTS=[],POLL=null,BUSY=false;
-let STROKE_MODE="crack",READY=false;
+let STROKE_MODE="crack",READY=false,LASTK=0,FITTED=true;
 
 const say=(t,c)=>{const e=$("#msg");e.textContent=t;e.style.color=c||"var(--ink2)";};
 const tag=t=>{$("#tag").textContent=t||"";$("#tag").style.display=t?"":"none";};
@@ -216,8 +232,39 @@ const q=()=>`?threshold=${($("#thr").value/100).toFixed(2)}&postprocess=${$("#pp
 async function loadModel(){
   const m=await j("/api/model");
   $("#mdesc").innerHTML=`<b>${m.current.kind==="ensemble"?"SAM + 17-feature ensemble":"single model"}</b>`+
-    `<div style="color:var(--ink3);font-size:11.5px;margin-top:2px">${m.current.label||""}</div>`+
     (m.ground_truth_available?"":`<div style="color:var(--warn);font-size:11.5px;margin-top:4px">No ground truth — retraining cannot be validated.</div>`);
+  await loadModelList();
+}
+// The picker lists every model the user has, newest first, and says which ones are
+// already computed for the images loaded -- because that is exactly the difference
+// between switching instantly and waiting for a prediction.
+async function loadModelList(){
+  const r=await j("/api/models").catch(()=>null);
+  const sel=$("#mpick");
+  if(!r||!r.ok||!r.models){sel.style.display="none";return;}
+  sel.style.display="";
+  sel.innerHTML=r.models.map(m=>{
+    const n=m.n_images, ready=m.cached_for;
+    const state=n===0?"":ready===n?" · ready":ready?` · ${ready}/${n} ready`:" · needs a pass";
+    return `<option value="${m.id}"${m.current?" selected":""}>${m.label}${state}</option>`;
+  }).join("");
+}
+async function switchModel(id){
+  const sel=$("#mpick"),prev=[...sel.options].find(o=>o.defaultSelected)?.value;
+  sel.disabled=true;say("switching model…");
+  const r=await post("/api/model/select",{id,focus:CUR});
+  if(!r.ok){sel.disabled=false;say(`could not switch — ${r.error}`,"var(--bad)");await loadModelList();return;}
+  await loadModel();
+  if(r.job){
+    // Some images have never been run through this model. The one on screen was put
+    // first in the queue, so refresh as each finishes rather than only at the end.
+    say(`switched — predicting ${r.pending.length} image${r.pending.length==1?"":"s"}…`);
+    watch(r.job,"Predicting");
+  }else{
+    sel.disabled=false;
+    say(`switched to ${r.current.label} — ${r.instant.length} image${r.instant.length==1?"":"s"} from cache`,"var(--ok)");
+    await loadList(true);if(CUR)show(CUR);
+  }
 }
 function scope(){
   const ck=IMAGES.reduce((a,i)=>a+(i.corrected_crack_px||0),0);
@@ -245,9 +292,12 @@ async function loadList(keep){
     const ready=im.status==="ready";
     const pct=im.predicted_area!=null?(im.predicted_area*100).toFixed(1)+"% crack":im.status;
     const cor=im.corrected_crack_px||im.corrected_not_px?" · edited":"";
+    // Say when a row's mask came from a model other than the current one, instead of
+    // showing it as plain "ready" and letting the picker imply otherwise.
+    const old=im.stale?` · <span style="color:var(--warn)">older model</span>`:"";
     el.innerHTML=`<span class="dot${ready?"":" busy"}"></span>`+
       (ready?`<img class="th" src="/api/image/${im.id}/thumb.png?w=128" loading="lazy">`:`<span class="th"></span>`)+
-      `<span class="tx"><span class="nm">${im.filename||im.id}</span><span class="sub">${pct}${cor}</span></span>`;
+      `<span class="tx"><span class="nm">${im.filename||im.id}</span><span class="sub">${pct}${cor}${old}</span></span>`;
     el.onclick=()=>show(im.id);
     L.appendChild(el);
   }
@@ -298,6 +348,7 @@ async function updateTag(){
 }
 function fit(){
   const im=IMAGES.find(x=>x.id===CUR);if(!im)return;
+  FITTED=true;                       // this zoom is ours, so a resize may recompute it
   const s=$("#stage");
   $("#zoom").value=Math.max(5,Math.min(400,Math.floor(Math.min(s.clientWidth/im.width,s.clientHeight/im.height)*100)));
   zoomed();
@@ -322,9 +373,12 @@ function zoomed(){
   s.style.paddingTop=Math.max(0,(s.clientHeight-H)/2)+"px";
 }
 
-// Re-centre on window resize; without this the image drifts off-centre as soon as
-// the window changes size, since the padding was computed for the old stage width.
-addEventListener("resize",()=>{if(CUR)zoomed();});
+// On resize: re-fit if the current zoom came from Fit, otherwise just re-centre.
+// Re-centring alone was not enough -- open the app in a short window and the zoom
+// computed for that stage sticks, so enlarging the window leaves the image a stamp in
+// the middle of a lot of black. Re-fitting unconditionally is also wrong: it would
+// throw away a zoom the user set by hand every time the window moved.
+addEventListener("resize",()=>{if(!CUR)return;FITTED?fit():zoomed();});
 
 /* ---------- painting ---------- */
 // Scale from the canvas's own measured rect rather than the zoom slider: exact
@@ -396,13 +450,20 @@ async function up(files){
 
 /* ---------- jobs ---------- */
 function watch(jid,what){
-  clearInterval(POLL);BUSY=true;$("#retrain").disabled=true;
+  clearInterval(POLL);BUSY=true;$("#retrain").disabled=true;$("#mpick").disabled=true;
   POLL=setInterval(async()=>{
     const s=await j(`/api/job/${jid}`);
     $("#prog").style.width=(s.n?Math.round(100*s.k/s.n):0)+"%";
-    if(s.state==="running"){say(`${what}: ${s.stage}${s.n?` (${s.k}/${s.n})`:""}`);return;}
-    clearInterval(POLL);$("#prog").style.width="0";BUSY=false;
-    if(s.state==="error"){say(`${what} failed — ${s.error}`,"var(--bad)");console.error(s.trace);scope();return;}
+    if(s.state==="running"){
+      say(`${what}: ${s.stage}${s.n?` (${s.k}/${s.n})`:""}`);
+      // The image on screen is predicted first, so show its result as soon as the
+      // job moves past it instead of making the user wait for the whole queue.
+      if(CUR&&s.k>1&&s.k!==LASTK){LASTK=s.k;refresh();loadList(true);}
+      return;
+    }
+    clearInterval(POLL);$("#prog").style.width="0";BUSY=false;$("#mpick").disabled=false;LASTK=0;
+    if(s.state==="error"){say(`${what} failed — ${s.error}`,"var(--bad)");console.error(s.trace);scope();
+      loadModelList();return;}
     const res=s.result||{};
     if(res.info!==undefined||res.error){                       // a retrain result
       if(!res.ok){say(res.error||"retraining refused","var(--warn)");scope();return;}
@@ -424,6 +485,7 @@ function watch(jid,what){
       say(m+` · not applied (${res.reason||"no improvement"}) — previous model kept`,"var(--warn)");
     }else say(`${what} complete`,"var(--ok)");
     await loadList(true);if(CUR)show(CUR);scope();
+    loadModelList();          // "needs a pass" -> "ready" once a model has been run
   },900);
 }
 
@@ -491,11 +553,19 @@ $("#del").onclick=async()=>{
   if(!IMAGES.length){$("#empty").style.display="flex";tag("");}
 };
 
+// Erase and Delete region both remove crack, and nothing on screen used to say how
+// they differ, so the active tool now explains itself in the status bar.
+const TOOL_HINT={
+  crack:"Drag to paint crack the model missed. Brush size is under Advanced.",
+  erase:"Drag to erase — removes only the pixels your brush passes over.",
+  region:"Click once to delete a whole connected blob of the model's result — for false positives too big to brush out.",
+};
 function setMode(m){MODE=m;$$("#tools button").forEach(b=>b.classList.toggle("on",b.dataset.mode===m));
-  $("#cv").style.cursor=m==="region"?"pointer":"crosshair";}
+  $("#cv").style.cursor=m==="region"?"pointer":"crosshair";
+  say(TOOL_HINT[m]||"");}
 $$("#tools button").forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
 $("#brush").oninput=e=>$("#brushv").textContent=e.target.value;
-$("#zoom").oninput=zoomed;
+$("#zoom").oninput=()=>{FITTED=false;zoomed();};   // hand-set zoom survives a resize
 $("#fit").onclick=fit;
 $("#showmask").onchange=refresh;
 // Legacy post-processing derives its own mask and ignores the threshold entirely
@@ -509,6 +579,16 @@ function syncThrEnabled(){
   f.style.opacity=off?".45":"";
   f.title=off?"Legacy post-processing computes its own mask and ignores Sensitivity":"";
 }
+$("#mpick").onchange=e=>switchModel(e.target.value);
+// Recovery path for the case the model-switch job died partway: the registry says one
+// model, some images still hold another's prediction (their rows read "older model").
+// Nothing else in the UI could fix that without deleting and re-uploading the image.
+$("#reapply").onclick=async()=>{
+  if(BUSY)return;
+  const r=await post("/api/reoverlay");
+  if(!r.ok){say(`could not re-apply — ${r.error}`,"var(--bad)");return;}
+  watch(r.job,"Re-applying model");
+};
 $("#pp").onchange=()=>{syncThrEnabled();refresh();};
 $("#thr").oninput=e=>$("#thrv").textContent=(e.target.value/100).toFixed(2);
 $("#thr").onchange=refresh;

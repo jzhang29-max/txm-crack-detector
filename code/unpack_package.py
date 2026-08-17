@@ -139,8 +139,8 @@ def main():
             print(f"==> built feature stacks for {len(built)} image(s)")
     s = status()
     if s["ground_truth_masks"] and not s["feature_stacks"]:
-        print("==> NOTE: no feature stacks yet. Retrain validation needs them; "
-              "rerun without --skip-features to build them.")
+        print("==> reference feature stacks not built yet -- the app does not need "
+              "them to run; the first Retrain builds them automatically.")
 
 
 if __name__ == "__main__":

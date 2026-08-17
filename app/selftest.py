@@ -81,6 +81,10 @@ def req(base, path, method="GET", body=None, files=None, timeout=600):
             return e.code, raw
 
 
+def S_label(resp):
+    return ((resp or {}).get("current") or {}).get("label")
+
+
 def wait_job(base, jid, label, timeout=2400):
     t0 = time.time()
     last = ""
@@ -349,6 +353,55 @@ def main():
               + (f"; errors: {errs[:1]}" if errs else ""))
     except Exception as e:
         check("concurrent strokes do not overwrite each other", False, str(e))
+
+    # ---- the overlay is the most-requested endpoint in the app, so it is cached.
+    # Assert identical bytes on repeat and that painting invalidates it, rather than
+    # asserting a timing, which would be flaky on a loaded machine.
+    try:
+        _, o1 = req(B, f"/api/image/{iid}/mask.png?threshold=0.50&postprocess=0", timeout=180)
+        _, o2 = req(B, f"/api/image/{iid}/mask.png?threshold=0.50&postprocess=0", timeout=180)
+        cached_file = os.path.exists(os.path.join(PROJECT, "app_data", "images", iid,
+                                                 "overlays", "0.50_0.png"))
+        check("overlay is cached and stable on repeat", o1 == o2 and cached_file,
+              f"{len(o1)} bytes, cache file {'written' if cached_file else 'MISSING'}")
+        req(B, f"/api/image/{iid}/correction", "POST",
+            dict(mode="crack", radius=20, points=[[250, 250]]))
+        _, o3 = req(B, f"/api/image/{iid}/mask.png?threshold=0.50&postprocess=0", timeout=180)
+        check("painting invalidates the cached overlay", o3 != o2,
+              f"{len(o2)} -> {len(o3)} bytes")
+        req(B, f"/api/image/{iid}/undo", "POST")
+    except Exception as e:
+        check("overlay caching", False, str(e))
+
+    # ---- model picker. Switching to a model already computed for an image must be
+    # instant (a hard link), not a re-prediction.
+    try:
+        _, ml = req(B, "/api/models", timeout=120)
+        models = ml.get("models") or []
+        cur = next((m for m in models if m.get("current")), None)
+        check("model list offers the current model", cur is not None,
+              f"{len(models)} model(s): " + ", ".join(m["label"] for m in models[:3]))
+        others = [m for m in models if not m.get("current")]
+        if not others:
+            skip("switching models is instant when cached",
+                 "only one model exists until you retrain")
+        else:
+            # Switch away and back; the trip back must need no prediction job because
+            # the current model's result for this image is already on disk.
+            t0 = time.time()
+            _, away = req(B, "/api/model/select", "POST",
+                          dict(id=others[0]["id"], focus=iid), timeout=120)
+            if away.get("job"):
+                wait_job(B, away["job"], "predict with other model")
+            _, back = req(B, "/api/model/select", "POST", dict(id=cur["id"]), timeout=120)
+            dt = time.time() - t0
+            check("switching models is instant when cached",
+                  back.get("ok") is True and not back.get("job") and len(back.get("instant") or []) >= 1,
+                  f"return trip needed no prediction job ({len(back.get('instant') or [])} from cache)")
+            check("switching back restores the original model",
+                  S_label(back) == cur["label"], f"{S_label(back)}")
+    except Exception as e:
+        check("model picker", False, str(e))
 
     # ---- reset
     _, c = req(B, f"/api/image/{iid}/correction", "POST", dict(mode="clear"))
