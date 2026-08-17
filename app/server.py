@@ -217,6 +217,17 @@ def api_mask(iid):
     h, w = mask.shape
     rgba = np.zeros((h, w, 4), np.uint8)
     rgba[mask] = (230, 40, 40, 140)
+
+    # Your own not-crack labels get their own colour, in CYAN, matching the SEM
+    # pipeline's red=crack / cyan=artifact convention so the two tools read the same.
+    # Without this, a not-crack correction was invisible: it removed red and left plain
+    # image behind, indistinguishable from somewhere you had never looked. That matters
+    # now that one click can label a whole region -- you need to see what you claimed.
+    corr = S.load_npy(iid, "correction.npy")
+    if corr is not None:
+        corr = np.asarray(corr)
+        if corr.shape == mask.shape:
+            rgba[corr == 2] = (40, 190, 210, 110)   # marked not-crack
     buf = io.BytesIO()
     Image.fromarray(rgba, mode="RGBA").save(buf, format="PNG", compress_level=1)
     data = buf.getvalue()
@@ -412,10 +423,26 @@ def _apply_flip_region(iid, x, y, mode, thr, pp, label):
     y0, y1 = int(ys.min()), int(ys.max()) + 1
     x0, x1 = int(xs.min()), int(xs.max()) + 1
     corr = np.asarray(corr).copy()
+
+    # A real toggle, which is what "click to flip" means and what SEM's default mode
+    # does. Clicking a region you already marked not-crack flips it back to crack
+    # instead of re-writing the same label -- otherwise a mis-click is a dead end: the
+    # region is cyan, clicking it again does nothing, and the only way back is undo,
+    # which also reverses whatever else you did since.
+    was_not_crack = bool(corr[y, x] == 2)
+    if mode == "confirm":
+        new_val, verb = 1, "crack"
+    elif mode == "remove":
+        new_val, verb = 2, "not-crack"
+    else:                                              # "toggle"
+        new_val = 1 if was_not_crack else 2
+        verb = "crack" if was_not_crack else "not-crack"
+
     S.push_undo(iid, y0, y1, x0, x1, corr[y0:y1, x0:x1].copy())
-    corr[target] = 1 if mode == "confirm" else 2
+    corr[target] = new_val
     S.save_npy(iid, "correction.npy", corr)
-    return jsonify(ok=True, region_px=n, mode=mode, source=source,
+    return jsonify(ok=True, region_px=n, mode=mode, source=source, marked=verb,
+                   flipped_back=bool(mode == "toggle" and was_not_crack),
                    crack_px=int((corr == 1).sum()), not_px=int((corr == 2).sum()),
                    undo_depth=S.undo_depth(iid))
 
@@ -548,8 +575,14 @@ def _mask_png_bytes(mask):
 
 
 def _overlay_png_bytes(iid, mask):
-    """The display image with the mask burned in as translucent red -- what you
-    see on screen, as a flat RGB image you can drop in a slide."""
+    """The display image with the mask burned in -- what you see on screen, as a flat
+    RGB image you can drop in a slide.
+
+    Red is crack, cyan is a region you marked as not-crack, same as the on-screen
+    overlay and the same convention as the SEM pipeline. The exported picture has to
+    agree with the screen, or a figure in a talk says something different from the tool
+    it came from.
+    """
     from PIL import Image
     disp = S.load_npy(iid, "display.npy")
     if disp is None:
@@ -557,8 +590,15 @@ def _overlay_png_bytes(iid, mask):
     g = (np.clip(np.asarray(disp), 0, 1) * 255).astype(np.uint8)
     rgb = np.stack([g] * 3, -1).astype(np.float32)
     red = np.array([230.0, 40.0, 40.0], np.float32)
+    cyan = np.array([40.0, 190.0, 210.0], np.float32)
     a = 0.45
     rgb[mask] = (1 - a) * rgb[mask] + a * red
+    corr = S.load_npy(iid, "correction.npy")
+    if corr is not None:
+        corr = np.asarray(corr)
+        if corr.shape == mask.shape:
+            nc = corr == 2
+            rgb[nc] = (1 - 0.35) * rgb[nc] + 0.35 * cyan
     buf = io.BytesIO()
     Image.fromarray(rgb.astype(np.uint8)).save(buf, format="PNG")
     return buf.getvalue()
