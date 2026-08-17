@@ -88,7 +88,10 @@ button:disabled{opacity:.4;cursor:default}
 .pop hr{border:0;border-top:1px solid var(--line);margin:5px 2px}
 #adv{padding:0 18px;background:#12151a;border-bottom:1px solid var(--line);
   max-height:0;overflow:hidden;transition:max-height .18s ease,padding .18s ease}
-#adv.open{max-height:200px;padding:13px 18px}
+/* Cap is generous and scrolls rather than a tight fixed height: the row wraps as
+   the window narrows, so a snug cap clips silently. Measured 136px at a 1100px
+   window but 214px at 900px, where a 200px cap ate the note's last line. */
+#adv.open{max-height:60vh;overflow-y:auto;padding:13px 18px}
 .advrow{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
 .fld{display:flex;gap:9px;align-items:center;font-size:12px;color:var(--ink2)}
 .fld input[type=range]{width:118px;accent-color:var(--brand)}
@@ -96,7 +99,7 @@ button:disabled{opacity:.4;cursor:default}
 .note{font-size:11px;color:var(--ink3);margin-top:9px;line-height:1.5;max-width:760px}
 #prog{height:2px;background:var(--brand);width:0;transition:width .25s}
 #stage{flex:1;overflow:auto;background:#0a0c0e;position:relative}
-#wrap{position:relative;transform-origin:0 0}
+#wrap{position:relative;margin:0 auto}  /* sized in JS to the zoomed image */
 #wrap img,#wrap canvas{position:absolute;top:0;left:0;display:block}
 #wrap canvas{cursor:crosshair}
 #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
@@ -264,11 +267,36 @@ function fit(){
   $("#zoom").value=Math.max(5,Math.min(400,Math.floor(Math.min(s.clientWidth/im.width,s.clientHeight/im.height)*100)));
   zoomed();
 }
-function zoomed(){$("#wrap").style.transform=`scale(${$("#zoom").value/100})`;$("#zoomv").textContent=$("#zoom").value+"%";}
+function zoomed(){
+  const z=$("#zoom").value/100;
+  $("#zoomv").textContent=$("#zoom").value+"%";
+  const im=IMAGES.find(x=>x.id===CUR),s=$("#stage"),w=$("#wrap");
+  if(!im){s.style.padding="0";return;}
+  // Size the elements rather than transform:scale() them. A transform shrinks the
+  // image visually but its absolutely positioned children keep claiming their full
+  // unscaled size in the stage's scrollable area, which gave the stage ~739x911 px
+  // of phantom scroll space at fit zoom -- scrollbars that scrolled into nothing.
+  // Setting width/height keeps layout and visuals in agreement, so a scrollbar now
+  // appears only when the image really is larger than the stage.
+  const W=Math.round(im.width*z),H=Math.round(im.height*z);
+  w.style.width=W+"px";w.style.height=H+"px";
+  for(const el of [$("#base"),$("#ovl"),$("#cv")]){el.style.width=W+"px";el.style.height=H+"px";}
+  // Horizontal centring is #wrap's `margin:0 auto` -- no JS needed, and an auto
+  // margin collapses to 0 once the image is wider than the stage, so it overflows
+  // into the scrollbar instead of being clipped. Only the vertical needs padding.
+  s.style.paddingTop=Math.max(0,(s.clientHeight-H)/2)+"px";
+}
+
+// Re-centre on window resize; without this the image drifts off-centre as soon as
+// the window changes size, since the padding was computed for the old stage width.
+addEventListener("resize",()=>{if(CUR)zoomed();});
 
 /* ---------- painting ---------- */
-const xy=e=>{const r=$("#cv").getBoundingClientRect(),z=$("#zoom").value/100;
-  return [(e.clientX-r.left)/z,(e.clientY-r.top)/z];};
+// Scale from the canvas's own measured rect rather than the zoom slider: exact
+// regardless of rounding in the displayed size, and independent of how the zoom
+// is applied.
+const xy=e=>{const c=$("#cv"),r=c.getBoundingClientRect();
+  return [(e.clientX-r.left)*(c.width/r.width),(e.clientY-r.top)*(c.height/r.height)];};
 function dot(x,y){const c=$("#cv").getContext("2d");
   c.fillStyle=MODE==="crack"?"rgba(70,225,140,.85)":"rgba(90,160,255,.85)";
   c.beginPath();c.arc(x,y,+$("#brush").value,0,7);c.fill();}
@@ -367,6 +395,9 @@ $("#advBtn").onclick=()=>{
   $("#advnote").innerHTML=o?`<b>Sensitivity</b> lowers or raises how much the model marks — 0.50 is the calibrated default. `+
     `<b>Legacy post-processing</b> reproduces the older pipeline's cleanup; it is off because it measurably removes thin cracks `+
     `(−0.08 accuracy, −0.07 of the crack found).`:"";
+  // Opening or closing the panel changes the stage's height, so the vertical
+  // centring padding computed for the old height is now wrong.
+  if(CUR)setTimeout(zoomed,200);
 };
 
 async function undo(){

@@ -12,7 +12,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PORT="${PORT:-8800}"
+# Exported, not just set: server.py reads PORT from the environment, so without
+# this the "serving on ..." line below and the port actually bound could disagree
+# any time this default is edited.
+export PORT="${PORT:-8800}"
 VENV="${VENV:-.venv}"
 
 if [ ! -d "$VENV" ]; then
