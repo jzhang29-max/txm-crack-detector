@@ -59,6 +59,14 @@ button:disabled{opacity:.4;cursor:default}
 .item .sub{display:block;font-size:11px;color:var(--ink3);margin-top:1px}
 .item .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:0 0 6px}
 .item .dot.busy{background:var(--warn)}
+/* Closing an image belongs on the image, not in Advanced: "Remove from list" sat next
+   to the tuning knobs, where it read as a setting rather than as an action on the row
+   you had selected. Hidden until the row is hovered or selected so the list stays calm. */
+.item .x{flex:0 0 18px;width:18px;height:18px;border:0;padding:0;border-radius:4px;
+  background:transparent;color:var(--ink3);font-size:15px;line-height:1;opacity:0;
+  transition:opacity .12s,background .12s,color .12s}
+.item:hover .x,.item.sel .x{opacity:1}
+.item .x:hover{background:#3a2326;color:#ff8080}
 #modelcard{border-top:1px solid var(--line);padding:13px 18px;background:#13161b}
 #modelcard .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink3)}
 #modelcard .v{font-size:12px;margin-top:3px}
@@ -191,7 +199,6 @@ button:disabled{opacity:.4;cursor:default}
       <button class="ghost" id="reapply" title="Re-predict every image with the current model">Re-apply model</button>
       <button class="ghost" id="undo2">Undo <span class="kbd">⌘Z</span></button>
       <button class="ghost danger" id="reset">Reset image</button>
-      <button class="ghost danger" id="del">Remove from list</button>
     </div>
     <div class="note" id="advnote"></div>
   </div>
@@ -297,8 +304,10 @@ async function loadList(keep){
     const old=im.stale?` · <span style="color:var(--warn)">older model</span>`:"";
     el.innerHTML=`<span class="dot${ready?"":" busy"}"></span>`+
       (ready?`<img class="th" src="/api/image/${im.id}/thumb.png?w=128" loading="lazy">`:`<span class="th"></span>`)+
-      `<span class="tx"><span class="nm">${im.filename||im.id}</span><span class="sub">${pct}${cor}${old}</span></span>`;
+      `<span class="tx"><span class="nm">${im.filename||im.id}</span><span class="sub">${pct}${cor}${old}</span></span>`+
+      `<button class="x" title="Remove ${im.filename||im.id} from the app (your original file is untouched)">\u00d7</button>`;
     el.onclick=()=>show(im.id);
+    el.querySelector(".x").onclick=e=>{e.stopPropagation();removeImage(im.id,im.filename||im.id);};
     L.appendChild(el);
   }
   if(!keep&&!CUR&&IMAGES.length)show(IMAGES[0].id);
@@ -543,15 +552,22 @@ $("#reset").onclick=async()=>{
   if(!r.ok){say(`could not erase — ${r.error}`,"var(--bad)");return;}
   refresh();loadList(true);say("corrections erased — ⌘Z to restore");
 };
-$("#del").onclick=async()=>{
-  if(!CUR||!confirm("Remove this image and its corrections from the app?\n\nThis cannot be undone. Your original file is untouched."))return;
-  try{const d=await fetch(`/api/image/${CUR}`,{method:"DELETE"});
+// Takes the id explicitly: the x belongs to its own row, so removing one image must not
+// depend on which row is currently selected.
+async function removeImage(id,name){
+  if(BUSY){say("finish the current job first","var(--warn)");return;}
+  const im=IMAGES.find(x=>x.id===id)||{};
+  const edited=(im.corrected_crack_px||0)+(im.corrected_not_px||0);
+  const warn=edited?`\n\nThis image has ${edited.toLocaleString()} corrected pixels. They will be deleted and cannot be recovered.`:"";
+  if(!confirm(`Remove ${name} from the app?${warn}\n\nYour original file is untouched.`))return;
+  try{const d=await fetch(`/api/image/${id}`,{method:"DELETE"});
     if(!d.ok){say(`could not remove — server returned ${d.status}`,"var(--bad)");return;}
   }catch(e){say(`could not remove — ${e.message||"cannot reach the server"}`,"var(--bad)");return;}
-  CUR=null;
-  await loadList();say("removed");
+  if(CUR===id){CUR=null;READY=false;$("#wrap").style.visibility="hidden";tag("");}
+  await loadList();say(`removed ${name}`);
   if(!IMAGES.length){$("#empty").style.display="flex";tag("");}
-};
+  else if(!CUR)show(IMAGES[0].id);
+}
 
 // Erase and Delete region both remove crack, and nothing on screen used to say how
 // they differ, so the active tool now explains itself in the status bar.
