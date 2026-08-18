@@ -30,6 +30,12 @@ for p in (os.path.join(HERE, "core"), os.path.join(PROJECT, "code")):
 import pipeline as P            # noqa: E402
 import store as S               # noqa: E402
 
+# Repair anything a killed job left mid-flight before serving a single request: a
+# status string like "hybrid model" is a progress line, not a state, and the frontend
+# treats it as "still processing" and refuses to let you paint on the image.
+for _iid, _was, _now in S.reconcile_statuses():
+    print(f"  reconciled {_iid[:52]}: '{_was}' -> {_now}", flush=True)
+
 app = Flask(__name__, static_folder=os.path.join(HERE, "static"))
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024   # 2 GB per upload batch
 

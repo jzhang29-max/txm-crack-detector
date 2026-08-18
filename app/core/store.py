@@ -310,6 +310,38 @@ def list_images():
     return out
 
 
+def reconcile_statuses():
+    """Repair statuses left mid-flight by a killed job. Returns what it changed.
+
+    meta["status"] doubles as the ingest progress line -- "SAM embedding",
+    "predicting", "hybrid model" -- and is only set to "ready" at the very end. So a job
+    that dies partway (server restarted, machine slept, model switch aborted) leaves the
+    last stage string sitting there as if it were a state. The frontend treats anything
+    other than "ready" as still-processing and hides the canvas, which means a
+    fully-predicted image becomes unlabellable because of a stale word.
+
+    Truth is on disk, not in the status field: if prob.npy exists the image is usable,
+    whatever the meta says. If it does not, the ingest really did not finish, and saying
+    "interrupted" is more use than a frozen progress line the user cannot distinguish
+    from work still happening.
+    """
+    fixed = []
+    for iid in sorted(os.listdir(IMAGES)) if os.path.isdir(IMAGES) else []:
+        if not os.path.isdir(path(iid)):
+            continue
+        m = read_meta(iid)
+        st = m.get("status")
+        if not m or st in ("ready", "uploaded", None) or str(st).startswith("interrupted"):
+            continue
+        if os.path.exists(path(iid, "prob.npy")):
+            write_meta(iid, dict(status="ready"))
+            fixed.append((iid, st, "ready"))
+        else:
+            write_meta(iid, dict(status=f"interrupted at '{st}' -- re-drop the file to finish"))
+            fixed.append((iid, st, "interrupted"))
+    return fixed
+
+
 def delete_image(image_id):
     d = path(image_id)
     if os.path.isdir(d):
